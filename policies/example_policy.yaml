@@ -1,0 +1,49 @@
+# Example auditrail policy.
+#
+# One entry per agent identity. Each tool an agent may call is declared
+# explicitly (default-deny: anything not listed is refused) and tagged
+# with the categories it touches. auditrail uses those tags to enforce
+# the "lethal trifecta" rule: a single session may not accumulate
+# data_access + untrusted_input + external_comm unless the specific tool
+# that would complete it is listed under trifecta_exempt_tools (meaning a
+# human has reviewed and explicitly accepted that risk for that action).
+#
+# Categories are free text; the four used by the bundled examples are:
+#   data_access      - reads private/sensitive data (resumes, records, files)
+#   untrusted_input   - reads content that could contain attacker instructions
+#                       (web pages, emails, tickets, third-party documents)
+#   external_comm     - sends data outside the current trust boundary
+#                       (HTTP calls, email, chat messages, writes to a
+#                       system another party can read)
+#   agent_to_agent     - invokes another agent; routed through
+#                       agent_bridge's signed-message verification
+
+version: "policy-v1-2026Q4"
+
+agents:
+  hr-screener:
+    allowed_tools: [read_resume, score_candidate, write_result]
+    tool_categories:
+      read_resume: [data_access]
+      score_candidate: []
+      write_result: [external_comm]
+    enforce_lethal_trifecta: true
+    trifecta_exempt_tools: []
+
+  support-bot:
+    # A support agent that reads customer tickets (untrusted: a ticket's
+    # text is attacker-influenceable) and can reply externally. If it also
+    # tried to read private account data in the same session, the trifecta
+    # rule blocks the reply until a human reviews it.
+    allowed_tools: [read_ticket, read_account_record, call_subagent, send_reply]
+    tool_categories:
+      read_ticket: [untrusted_input]
+      read_account_record: [data_access]
+      call_subagent: [agent_to_agent]
+      send_reply: [external_comm]
+    enforce_lethal_trifecta: true
+    trifecta_exempt_tools: []
+
+default:
+  allowed_tools: []
+  enforce_lethal_trifecta: true
