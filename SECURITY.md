@@ -29,10 +29,9 @@ Be skeptical of any tool (including this one) that doesn't say this part out lou
 
 ## Reporting a vulnerability
 
-[TODO: set up a security contact before this repo goes public -- e.g. a
-GitHub Security Advisory on this repo, or a dedicated
-security@yourdomain address. Do not leave this section as a placeholder
-in the public release.]
+Please report suspected vulnerabilities privately through GitHub's
+Security Advisories on this repository (Security tab → "Report a
+vulnerability"), rather than opening a public issue.
 
 ## Roadmap
 
