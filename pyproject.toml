@@ -27,8 +27,8 @@ live = ["anthropic>=0.40"]
 dev = ["pytest>=8.0"]
 
 [project.urls]
-Homepage = "https://github.com/REPLACE_ME/auditrail"
-Issues = "https://github.com/REPLACE_ME/auditrail/issues"
+Homepage = "https://github.com/x91652-pixel/auditrail"
+Issues = "https://github.com/x91652-pixel/auditrail/issues"
 
 [project.scripts]
 auditrail = "auditrail.cli:main"

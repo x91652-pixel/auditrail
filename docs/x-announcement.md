@@ -14,7 +14,7 @@ Shipped a small OSS tool: `auditrail` — a tamper-evident audit trail +
 EchoLeak, Slack AI, ForcedLeak, the GitHub MCP leak, Replit's deleted
 prod DB — different products, same shape. This targets that shape.
 
-🔗 [github.com/REPLACE_ME/auditrail]
+🔗 [github.com/x91652-pixel/auditrail]
 
 **2/**
 The "lethal trifecta" (h/t @simonw): an agent session with (1) private
@@ -64,7 +64,7 @@ something, I'd genuinely like to hear it. Issues and PRs open.
 EchoLeak、Slack AI、ForcedLeak、GitHub MCP 洩露、Replit 刪除正式資料庫——
 產品不同，結構相同。這個工具就是針對這個結構做的。
 
-🔗 [github.com/REPLACE_ME/auditrail]
+🔗 [github.com/x91652-pixel/auditrail]
 
 **2/**
 「致命三要素」（lethal trifecta，概念來自 Simon Willison）：一個 AI
@@ -102,7 +102,7 @@ Issue 跟 PR 都開放。
 
 ## Notes before you post
 
-1. Replace `[github.com/REPLACE_ME/auditrail]` with the real repo URL
+1. Replace `[github.com/x91652-pixel/auditrail]` with the real repo URL
    once it exists (see the checklist in chat for what needs to happen
    first: repo created, code pushed, CI green).
 2. Consider posting the English thread from the account/handle you want

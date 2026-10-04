@@ -4,7 +4,7 @@
 
 `pip install -e .` today; `pip install auditrail` once it's on PyPI (not yet -- see Status below).
 
-[![test](https://github.com/REPLACE_ME/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/REPLACE_ME/auditrail/actions/workflows/test.yml)
+[![test](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml)
 ![status](https://img.shields.io/badge/status-v0.1_proof--of--concept-orange)
 ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
@@ -79,7 +79,7 @@ your threat model.
 ## Quickstart
 
 ```bash
-git clone https://github.com/REPLACE_ME/auditrail
+git clone https://github.com/x91652-pixel/auditrail
 cd auditrail
 pip install -e ".[dev]"
 
