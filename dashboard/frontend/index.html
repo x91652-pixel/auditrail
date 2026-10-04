@@ -24,6 +24,7 @@
   .t-allow { background:#E8F1E8; color:var(--ok); }
   .t-deny { background:#FBE8E6; color:var(--bad); }
   .t-sandboxed { background:#EAF1F8; color:var(--navy); }
+  .t-error { background:#FCF2DE; color:var(--warn); }
   .banner { padding:14px 18px; border-radius:10px; font-size:14px; margin-bottom:16px; }
   .b-ok { background:#E8F1E8; color:var(--ok); }
   .b-bad { background:#FBE8E6; color:var(--bad); }
@@ -60,6 +61,7 @@
           <option value="allow">允許</option>
           <option value="deny">拒絕</option>
           <option value="sandboxed">沙盒執行</option>
+          <option value="error">執行失敗</option>
         </select>
       </label>
       <span class="muted" id="ledger-count"></span>
@@ -142,7 +144,7 @@
       const tdDec = document.createElement("td");
       const tag = document.createElement("span");
       tag.className = "tag t-" + r.decision;
-      tag.textContent = { allow: "允許", deny: "拒絕", sandboxed: "沙盒執行" }[r.decision] || r.decision;
+      tag.textContent = { allow: "允許", deny: "拒絕", sandboxed: "沙盒執行", error: "執行失敗" }[r.decision] || r.decision;
       tdDec.appendChild(tag);
       tr.appendChild(tdDec);
 

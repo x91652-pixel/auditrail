@@ -68,16 +68,20 @@ fn bin_missing(cfg: &Config, e: std::io::Error) -> axum::response::Response {
         .into_response()
 }
 
+/// Parse a JSONL evidence log. Blank and malformed lines are skipped.
+fn parse_records(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
 /// GET /api/ledger — every record in the evidence log, in order.
 async fn ledger(State(cfg): State<Arc<Config>>) -> axum::response::Response {
     let path = ledger_path(&cfg);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
-            let records: Vec<Value> = text
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .filter_map(|l| serde_json::from_str(l).ok())
-                .collect();
+            let records = parse_records(&text);
             Json(json!({
                 "path": path.display().to_string(),
                 "count": records.len(),
@@ -145,5 +149,29 @@ async fn policy(State(cfg): State<Arc<Config>>) -> axum::response::Response {
         }))
         .into_response(),
         Err(e) => bin_missing(&cfg, e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_records;
+
+    #[test]
+    fn parses_valid_lines_and_skips_blank_and_malformed() {
+        let text = "{\"seq\":0,\"decision\":\"allow\"}\n\n   \nnot json\n{\"seq\":1,\"decision\":\"deny\"}\n";
+        let records = parse_records(text);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1]["decision"], "deny");
+    }
+
+    #[test]
+    fn empty_input_yields_no_records() {
+        assert!(parse_records("").is_empty());
+    }
+
+    #[test]
+    fn keeps_error_decisions_so_failures_are_visible() {
+        let records = parse_records("{\"seq\":3,\"decision\":\"error\",\"reason\":\"TimeoutError\"}\n");
+        assert_eq!(records[0]["decision"], "error");
     }
 }

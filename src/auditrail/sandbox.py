@@ -143,12 +143,29 @@ class Guard:
                     raise ToolDenied(name, decision.reason or "denied")
 
                 start = time.monotonic()
-                if isolate:
-                    result = _call_isolated(fn, args, kwargs, timeout)
-                    effective_decision = "sandboxed"
-                else:
-                    result = fn(*args, **kwargs)
-                    effective_decision = "allow"
+                try:
+                    if isolate:
+                        result = _call_isolated(fn, args, kwargs, timeout)
+                        effective_decision = "sandboxed"
+                    else:
+                        result = fn(*args, **kwargs)
+                        effective_decision = "allow"
+                except Exception as exc:
+                    # A failed call may still have touched data before failing,
+                    # so it counts toward the session's trifecta state (conservative).
+                    self.policy.commit(session, name, extra_categories=categories)
+                    self.ledger.record(
+                        agent_id=session.agent_id,
+                        session_id=session.session_id,
+                        policy_version=self.policy.version,
+                        tool=name,
+                        categories=categories,
+                        args=call_args,
+                        decision="error",
+                        reason=f"{type(exc).__name__}: {exc}",
+                        duration_ms=(time.monotonic() - start) * 1000,
+                    )
+                    raise
                 duration_ms = (time.monotonic() - start) * 1000
 
                 self.policy.commit(session, name, extra_categories=categories)

@@ -8,3 +8,11 @@ imports it as `module.name`.
 
 def add(a, b):
     return a + b
+
+
+def fail_always(x):
+    raise ValueError("nope")
+
+
+def never_runs():
+    raise AssertionError("a denied call must never reach the tool body")

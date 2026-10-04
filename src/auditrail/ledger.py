@@ -28,8 +28,12 @@ GENESIS_HASH = "0" * 64
 
 
 def _digest(obj: Any) -> str:
-    """Stable SHA-256 digest of any JSON-serializable value."""
-    payload = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    """SHA-256 digest of a tool call's arguments or result.
+
+    Non-JSON values fall back to repr() so that a failed call with an
+    unserializable argument can still be recorded instead of crashing the logger.
+    """
+    payload = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=repr)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -106,7 +110,7 @@ class Ledger:
         result: Any = None,
         duration_ms: Optional[float] = None,
     ) -> EvidenceRecord:
-        assert decision in ("allow", "deny", "sandboxed")
+        assert decision in ("allow", "deny", "sandboxed", "error")
         self._seq += 1
         prev_hash = self._last_hash()
         rec = EvidenceRecord(

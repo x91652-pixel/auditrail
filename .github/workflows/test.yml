@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  python:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -20,3 +20,17 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
       - run: pytest -v
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dashboard
+      - run: cargo test --locked
+      - run: cargo build --release

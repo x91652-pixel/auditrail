@@ -156,9 +156,20 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 29 tests are deterministic and require no network access or API key
+All 66 Python tests are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
-if you're offline).
+if you're offline). The Rust dashboard backend has its own tests:
+`cd dashboard && cargo test`.
+
+To see the attack simulation (a fictional logistics company with five
+agents, 9 normal operations and 13 attacks, including the known gaps):
+
+```bash
+python -m examples.logistics_sim.run
+```
+
+Results and the reasoning behind each scenario are in
+[docs/simulation.md](docs/simulation.md).
 
 ## Contributing
 

@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from .ledger import Ledger
 from .policy import PolicyEngine
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    if not Path(args.ledger_path).is_file():
+        print(f"[ERROR] {args.ledger_path}: file not found (nothing to verify)")
+        return 2
     ledger = Ledger(args.ledger_path)
     ok, bad_seq = ledger.verify()
     count = sum(1 for _ in ledger)
