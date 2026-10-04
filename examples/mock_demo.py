@@ -153,9 +153,10 @@ def run_demo() -> int:
     victim_idx = next(i for i, r in enumerate(records) if r["decision"] == "deny")
     records[victim_idx]["decision"] = "allow"
     lines[victim_idx] = json.dumps(records[victim_idx], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    LEDGER_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tampered_path = LEDGER_PATH.with_name("demo_ledger_tampered.jsonl")
+    tampered_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    ledger2 = Ledger(LEDGER_PATH)
+    ledger2 = Ledger(tampered_path)
     ok2, bad_seq2 = ledger2.verify()
     print(f"[TAMPER DETECTED] chain intact: {ok2}, first bad seq: {bad_seq2}")
 

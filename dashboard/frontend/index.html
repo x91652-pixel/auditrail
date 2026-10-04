@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auditrail 儀表板</title>
+<style>
+  :root { --navy:#1F3A5F; --ink:#1C1C1A; --muted:#6B7280; --line:#E4E0D6; --bg:#F6F4EF; --ok:#2F6B3A; --bad:#B23A2E; --warn:#8A5A10; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--navy); color:#F6F4EF; padding:18px 28px; }
+  header h1 { margin:0; font-size:20px; font-weight:600; }
+  header p { margin:4px 0 0; font-size:13px; opacity:.8; }
+  nav { display:flex; gap:4px; padding:12px 28px 0; border-bottom:1px solid var(--line); background:#fff; }
+  nav button { border:none; background:none; padding:10px 16px; font-size:14px; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; }
+  nav button.active { color:var(--navy); border-bottom-color:var(--navy); font-weight:600; }
+  main { padding:24px 28px; max-width:1100px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; font-size:12px; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:2px solid var(--line); }
+  td { padding:9px 10px; border-bottom:1px solid #EFEDE4; vertical-align:top; }
+  .mono { font-family: "SF Mono",Consolas,monospace; font-size:12px; color:#4B4A45; word-break:break-all; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:3px 9px; border-radius:999px; }
+  .t-allow { background:#E8F1E8; color:var(--ok); }
+  .t-deny { background:#FBE8E6; color:var(--bad); }
+  .t-sandboxed { background:#EAF1F8; color:var(--navy); }
+  .banner { padding:14px 18px; border-radius:10px; font-size:14px; margin-bottom:16px; }
+  .b-ok { background:#E8F1E8; color:var(--ok); }
+  .b-bad { background:#FBE8E6; color:var(--bad); }
+  .b-warn { background:#FCF2DE; color:var(--warn); }
+  button.action { background:var(--navy); color:#fff; border:none; border-radius:8px; padding:10px 18px; font-size:14px; cursor:pointer; }
+  button.action:disabled { opacity:.5; cursor:wait; }
+  select { padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff; }
+  .toolbar { display:flex; gap:12px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  .muted { color:var(--muted); font-size:13px; }
+  pre { white-space:pre-wrap; font-size:12.5px; margin:0; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>auditrail 儀表板</h1>
+  <p>AI 代理的防篡改證據日誌、完整性驗證與政策檢視</p>
+</header>
+<nav>
+  <button data-tab="ledger" class="active">證據日誌</button>
+  <button data-tab="verify">完整性驗證</button>
+  <button data-tab="policy">政策檢視</button>
+</nav>
+<main>
+
+  <section id="tab-ledger">
+    <div class="toolbar">
+      <label class="muted">代理：
+        <select id="filter-agent"><option value="">全部</option></select>
+      </label>
+      <label class="muted">結果：
+        <select id="filter-decision">
+          <option value="">全部</option>
+          <option value="allow">允許</option>
+          <option value="deny">拒絕</option>
+          <option value="sandboxed">沙盒執行</option>
+        </select>
+      </label>
+      <span class="muted" id="ledger-count"></span>
+    </div>
+    <div class="card hidden" id="ledger-error"></div>
+    <div class="card"><table>
+      <thead><tr><th>序號</th><th>時間 (UTC)</th><th>代理</th><th>工具</th><th>類別</th><th>結果</th><th>原因</th><th>雜湊（前 16 碼）</th></tr></thead>
+      <tbody id="ledger-body"></tbody>
+    </table></div>
+  </section>
+
+  <section id="tab-verify" class="hidden">
+    <div class="card">
+      <p style="margin-top:0">逐筆重算雜湊鏈，確認日誌從寫入到現在沒有被修改、插入、刪除。驗證本身由 <code>auditrail verify</code> 指令完成。</p>
+      <button class="action" id="verify-btn">執行完整性驗證</button>
+    </div>
+    <div id="verify-result"></div>
+  </section>
+
+  <section id="tab-policy" class="hidden">
+    <div id="policy-status"></div>
+    <div class="card" id="policy-body"></div>
+  </section>
+
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "");
+
+  document.querySelectorAll("nav button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
+      ["ledger", "verify", "policy"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== btn.dataset.tab));
+      if (btn.dataset.tab === "policy") loadPolicy();
+    });
+  });
+
+  let allRecords = [];
+
+  function showError(el, message) {
+    el.replaceChildren();
+    const d = document.createElement("div");
+    d.className = "banner b-bad";
+    d.textContent = message;
+    el.appendChild(d);
+  }
+
+  async function loadLedger() {
+    const errBox = $("ledger-error");
+    errBox.classList.add("hidden");
+    try {
+      const res = await fetch("/api/ledger");
+      const data = await res.json();
+      if (!res.ok) { errBox.classList.remove("hidden"); errBox.textContent = data.error; return; }
+      allRecords = data.records;
+      const agents = [...new Set(allRecords.map((r) => r.agent_id))];
+      const sel = $("filter-agent");
+      agents.forEach((a) => { const o = document.createElement("option"); o.value = a; o.textContent = a; sel.appendChild(o); });
+      renderLedger();
+    } catch (e) {
+      errBox.classList.remove("hidden");
+      errBox.textContent = "無法連線到後端：" + e;
+    }
+  }
+
+  function renderLedger() {
+    const agent = $("filter-agent").value;
+    const decision = $("filter-decision").value;
+    const rows = allRecords.filter((r) => (!agent || r.agent_id === agent) && (!decision || r.decision === decision));
+    const body = $("ledger-body");
+    body.replaceChildren();
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const cells = [
+        r.seq, esc(r.ts).replace("T", " ").replace("Z", ""), r.agent_id, r.tool,
+        (r.categories || []).join(", ") || "—",
+      ];
+      cells.forEach((v) => { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); });
+
+      const tdDec = document.createElement("td");
+      const tag = document.createElement("span");
+      tag.className = "tag t-" + r.decision;
+      tag.textContent = { allow: "允許", deny: "拒絕", sandboxed: "沙盒執行" }[r.decision] || r.decision;
+      tdDec.appendChild(tag);
+      tr.appendChild(tdDec);
+
+      const tdReason = document.createElement("td");
+      tdReason.className = "mono";
+      tdReason.textContent = r.reason || "—";
+      tr.appendChild(tdReason);
+
+      const tdHash = document.createElement("td");
+      tdHash.className = "mono";
+      tdHash.textContent = esc(r.hash).slice(0, 16) + "…";
+      tr.appendChild(tdHash);
+
+      body.appendChild(tr);
+    });
+    $("ledger-count").textContent = `顯示 ${rows.length} / ${allRecords.length} 筆`;
+  }
+
+  $("filter-agent").addEventListener("change", renderLedger);
+  $("filter-decision").addEventListener("change", renderLedger);
+
+  $("verify-btn").addEventListener("click", async () => {
+    const btn = $("verify-btn");
+    const out = $("verify-result");
+    btn.disabled = true;
+    btn.textContent = "驗證中…";
+    try {
+      const res = await fetch("/api/verify");
+      const data = await res.json();
+      out.replaceChildren();
+      if (!res.ok) { showError(out, data.error); return; }
+      const banner = document.createElement("div");
+      banner.className = "banner " + (data.ok ? "b-ok" : "b-bad");
+      banner.textContent = data.ok ? "完整性驗證通過：雜湊鏈完整，沒有發現被竄改的紀錄。" : "發現竄改：雜湊鏈在某一筆紀錄斷裂，該筆之後的紀錄不可信。";
+      out.appendChild(banner);
+      const pre = document.createElement("div");
+      pre.className = "card";
+      const code = document.createElement("pre");
+      code.textContent = data.output;
+      pre.appendChild(code);
+      out.appendChild(pre);
+    } catch (e) {
+      showError(out, "無法連線到後端：" + e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "執行完整性驗證";
+    }
+  });
+
+  async function loadPolicy() {
+    const status = $("policy-status");
+    const body = $("policy-body");
+    body.replaceChildren();
+    status.replaceChildren();
+    try {
+      const res = await fetch("/api/policy");
+      const data = await res.json();
+      if (!res.ok) { showError(status, data.error); return; }
+      const banner = document.createElement("div");
+      banner.className = "banner " + (data.lint_ok ? "b-ok" : "b-bad");
+      banner.textContent = data.lint_output || (data.lint_ok ? "政策檔格式正確" : "政策檔驗證失敗");
+      status.appendChild(banner);
+
+      const agents = data.policy.agents || {};
+      Object.entries(agents).forEach(([agentId, cfg]) => {
+        const h = document.createElement("h3");
+        h.textContent = agentId;
+        h.style.margin = "0 0 10px";
+        body.appendChild(h);
+
+        const t = document.createElement("table");
+        t.innerHTML = "<thead><tr><th>工具</th><th>類別</th><th>是否允許</th></tr></thead>";
+        const tb = document.createElement("tbody");
+        const tools = cfg.allowed_tools || [];
+        const cats = cfg.tool_categories || {};
+        const exempt = cfg.trifecta_exempt_tools || [];
+        tools.forEach((tool) => {
+          const tr = document.createElement("tr");
+          const c1 = document.createElement("td"); c1.textContent = tool;
+          const c2 = document.createElement("td"); c2.textContent = (cats[tool] || []).join(", ") || "—";
+          const c3 = document.createElement("td");
+          c3.textContent = exempt.includes(tool) ? "允許（已豁免三要素檢查）" : "允許";
+          tr.append(c1, c2, c3);
+          tb.appendChild(tr);
+        });
+        t.appendChild(tb);
+        body.appendChild(t);
+
+        const note = document.createElement("p");
+        note.className = "muted";
+        note.textContent = "致命三要素防護：" + (cfg.enforce_lethal_trifecta ? "已啟用" : "未啟用");
+        body.appendChild(note);
+      });
+    } catch (e) {
+      showError(status, "無法連線到後端：" + e);
+    }
+  }
+
+  loadLedger();
+</script>
+</body>
+</html>
