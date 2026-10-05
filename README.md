@@ -76,6 +76,36 @@ certified regulatory compliance -- is documented honestly in
 [SECURITY.md](SECURITY.md). Read that before you decide whether this fits
 your threat model.
 
+## Anchoring (protocol v1)
+
+`verify` only proves the ledger is internally consistent: someone who rewrites
+the whole ledger, or cuts off its tail, still passes it. Anchoring periodically
+records the chain head (sequence number and hash, no tool arguments or results)
+and publishes it to a witness outside the ledger owner's sole control. The full
+specification is in `auditrail-docs/錨定協定.md`.
+
+```bash
+# record the current head; with --push, also push the witness commit
+auditrail anchor --ledger ledger.jsonl --anchors anchors.jsonl --git-repo ../witness
+auditrail verify ledger.jsonl --anchors anchors.jsonl --git-repo ../witness
+```
+
+`verify --anchors` reports one of `OK`, `TAMPERED_LEDGER`, `TAMPERED_ANCHOR`,
+`REWRITTEN`, `TRUNCATED`, `SINK_MISMATCH`, or `SINK_UNREACHABLE`, plus how many
+records after the last anchor are not covered.
+
+What anchoring proves: records up to the last anchor were not rewritten, deleted,
+or reordered, provided that anchor has been stored outside the owner's control.
+Truncation below an anchor is detected in the same way.
+
+What it does not prove: records after the last anchor; a ledger rewritten from
+the start whose anchors were never stored externally; records that were never
+written at all; a compromised host making changes in real time; or a witness and
+the owner acting together. The git witness is only as strong as the place the
+repository lives. A repository the owner controls can be rewritten by that owner,
+so anchor hashes should also be copied to a third party periodically. There are no
+signatures, Merkle proofs, or RFC 3161 timestamps in this version.
+
 ## Quickstart
 
 ```bash
