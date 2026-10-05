@@ -388,3 +388,22 @@ def test_push_is_not_called_unless_requested(tmp_path, monkeypatch):
     assert pushes == []
     anchor_ledger(led, tmp_path / "a2.jsonl", sink=GitSink(repo), push=True)
     assert pushes == ["origin"]
+
+
+def test_cli_json_output_for_verify_and_anchor(tmp_path, capsys):
+    from auditrail.cli import main
+
+    ledger_path = tmp_path / "l.jsonl"
+    anchors = tmp_path / "anchors.jsonl"
+    make_ledger(ledger_path, n=3)
+    assert main(["anchor", "--ledger", str(ledger_path), "--anchors", str(anchors), "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "ANCHORED" and out["anchor"]["seq"] == 2
+
+    assert main(["verify", str(ledger_path), "--anchors", str(anchors), "--json"]) == 0
+    res = json.loads(capsys.readouterr().out)
+    assert res["status"] == "OK"
+
+    assert main(["anchor", "--ledger", str(tmp_path / "missing.jsonl"), "--anchors", str(anchors), "--json"]) == 2
+    err = json.loads(capsys.readouterr().out)
+    assert err["status"] == "ERROR"

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auditrail 錨定</title>
+<style>
+  :root { --navy:#1F3A5F; --ink:#1C1C1A; --muted:#6B7280; --line:#E4E0D6; --bg:#F6F4EF; --ok:#2F6B3A; --bad:#B23A2E; --warn:#8A5A10; --info:#1F3A5F; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--navy); color:#F6F4EF; padding:18px 28px; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:10px; }
+  header h1 { margin:0; font-size:20px; font-weight:600; }
+  header p { margin:4px 0 0; font-size:13px; opacity:.8; }
+  header a { color:#F6F4EF; font-size:13px; opacity:.9; }
+  main { padding:24px 28px; max-width:1100px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .card h2 { margin:0 0 8px; font-size:16px; color:var(--navy); }
+  .muted { color:var(--muted); font-size:13px; }
+  .banner { padding:14px 18px; border-radius:10px; font-size:14px; margin:12px 0 0; line-height:1.6; }
+  .b-ok { background:#E8F1E8; color:var(--ok); }
+  .b-bad { background:#FBE8E6; color:var(--bad); }
+  .b-warn { background:#FCF2DE; color:var(--warn); }
+  .b-info { background:#EAF1F8; color:var(--info); }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  button.action { background:var(--navy); color:#fff; border:none; border-radius:8px; padding:10px 18px; font-size:14px; cursor:pointer; }
+  button.action:disabled { opacity:.5; cursor:wait; }
+  button.secondary { background:#fff; color:var(--navy); border:1px solid var(--navy); border-radius:8px; padding:9px 16px; font-size:14px; cursor:pointer; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; font-size:12px; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:2px solid var(--line); }
+  td { padding:9px 10px; border-bottom:1px solid #EFEDE4; vertical-align:top; }
+  .mono { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:#4B4A45; word-break:break-all; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:3px 9px; border-radius:999px; }
+  .t-local { background:#EFEDE4; color:#5B5850; }
+  .t-witness { background:#E8F1E8; color:var(--ok); }
+  ul.scope { margin:6px 0 0; padding-left:20px; font-size:14px; line-height:1.7; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width: 720px) { .cols { grid-template-columns:1fr; } }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>auditrail 錨定</h1>
+    <p>把帳本的鏈頭發布到外部見證者，讓已錨定的紀錄無法在不被發現的情況下改寫或截斷</p>
+  </div>
+  <a href="/">← 回到儀表板</a>
+</header>
+<main>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <h2>目前驗證狀態</h2>
+        <div class="muted">依協定第 6 節逐步檢查：帳本鏈 → 錨點鏈 → 錨點對帳本 → 見證者</div>
+      </div>
+      <button class="action" id="verify-btn">重新驗證</button>
+    </div>
+    <div id="verify-result"></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <h2>建立錨點</h2>
+        <div class="muted">記錄帳本目前的鏈頭，並寫入本機見證者 repo 的 commit。<strong>不會推送到遠端。</strong>鏈頭沒有新進展時不會重複錨定。</div>
+      </div>
+      <button class="action" id="anchor-btn">建立錨點</button>
+    </div>
+    <div id="anchor-result"></div>
+  </section>
+
+  <section class="card">
+    <h2>錨點清單</h2>
+    <div class="muted" id="anchor-count"></div>
+    <div style="overflow-x:auto; margin-top:10px">
+      <table>
+        <thead><tr><th>錨定到序號</th><th>鏈頭 hash</th><th>錨點 hash</th><th>前一錨點</th><th>建立時間 (UTC)</th><th>見證者</th></tr></thead>
+        <tbody id="anchor-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="cols">
+    <section class="card">
+      <h2>這個機制證明什麼</h2>
+      <ul class="scope">
+        <li>最後一個錨點之前的紀錄，沒有被改寫、刪除或重排（前提：錨點已存放在擁有者無法單獨控制的地方）。</li>
+        <li>錨點之後曾有紀錄被截斷，若錨點已外部保存。</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h2>這個機制不證明什麼</h2>
+      <ul class="scope">
+        <li>最後一個錨點之後的尾端紀錄。</li>
+        <li>整條帳本從頭重寫、且錨點未被外部保存的情況。</li>
+        <li>根本沒有寫入的紀錄（漏記）。</li>
+        <li>擁有者與見證者串通。</li>
+        <li>本機見證者 repo 由擁有者掌控時，擁有者仍可改寫其歷史。</li>
+      </ul>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>檔案位置</h2>
+    <table>
+      <tbody>
+        <tr><td style="width:120px">帳本</td><td class="mono" id="p-ledger"></td></tr>
+        <tr><td>錨點檔</td><td class="mono" id="p-anchors"></td></tr>
+        <tr><td>見證者 repo</td><td class="mono" id="p-witness"></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  const STATUS = {
+    OK: ["b-ok", "通過", "帳本與錨點一致，見證者內容也相符。"],
+    TAMPERED_LEDGER: ["b-bad", "帳本鏈被破壞", "帳本的雜湊鏈在某一筆紀錄斷裂。"],
+    TAMPERED_ANCHOR: ["b-bad", "錨點檔被竄改", "錨點檔的雜湊鏈或格式不符。"],
+    REWRITTEN: ["b-bad", "歷史被改寫", "錨定序號上的紀錄與錨點記載的鏈頭不符。"],
+    TRUNCATED: ["b-bad", "帳本被截斷", "帳本比錨點記載的序號還短。"],
+    SINK_MISMATCH: ["b-bad", "見證者內容不符", "見證者目前的內容沒有這個錨點。"],
+    SINK_UNREACHABLE: ["b-warn", "無法連線見證者", "這不代表竄改，但在見證者可用之前不能宣稱已驗證。"],
+  };
+
+  function banner(parent, cls, title, lines) {
+    const d = document.createElement("div");
+    d.className = "banner " + cls;
+    const strong = document.createElement("strong");
+    strong.textContent = title;
+    d.appendChild(strong);
+    lines.forEach((l) => { const p = document.createElement("div"); p.textContent = l; d.appendChild(p); });
+    parent.replaceChildren(d);
+  }
+
+  function short(h, n = 12) { return h ? String(h).slice(0, n) + "…" : "—"; }
+
+  async function loadPaths() {
+    const res = await fetch("/api/anchors");
+    const data = await res.json();
+    $("p-ledger").textContent = data.ledger_path;
+    $("p-anchors").textContent = data.anchors_path;
+    $("p-witness").textContent = data.witness_path;
+    renderAnchors(data.anchors);
+  }
+
+  function renderAnchors(anchors) {
+    const body = $("anchor-body");
+    body.replaceChildren();
+    $("anchor-count").textContent = `共 ${anchors.length} 個錨點`;
+    anchors.forEach((a, i) => {
+      const tr = document.createElement("tr");
+      const prevOk = i === 0 ? a.prev_anchor === "0".repeat(64) : a.prev_anchor === anchors[i - 1].anchor_hash;
+      const cells = [a.seq, short(a.head_hash), short(a.anchor_hash), (prevOk ? "" : "⚠ ") + (i === 0 ? "（第一個）" : short(a.prev_anchor)), a.created_at];
+      cells.forEach((v, idx) => {
+        const td = document.createElement("td");
+        td.textContent = v;
+        if (idx >= 1 && idx <= 3) td.className = "mono";
+        tr.appendChild(td);
+      });
+      const tdW = document.createElement("td");
+      const tag = document.createElement("span");
+      const witnessed = Boolean(a.sink_ref);
+      tag.className = "tag " + (witnessed ? "t-witness" : "t-local");
+      tag.textContent = witnessed ? "已發布 " + a.sink_ref.split(":")[0] : "僅本機";
+      tdW.appendChild(tag);
+      tr.appendChild(tdW);
+      body.appendChild(tr);
+    });
+    if (!anchors.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 6;
+      td.className = "muted";
+      td.textContent = "尚未建立錨點。按上方「建立錨點」開始。";
+      tr.appendChild(td);
+      body.appendChild(tr);
+    }
+  }
+
+  async function verify() {
+    const btn = $("verify-btn");
+    btn.disabled = true;
+    btn.textContent = "驗證中…";
+    try {
+      const res = await fetch("/api/anchor/verify");
+      const data = await res.json();
+      const info = STATUS[data.status] || ["b-warn", data.status, ""];
+      const lines = [data.detail || ""];
+      if (data.anchored_upto !== null && data.anchored_upto !== undefined) lines.push(`已錨定至序號 ${data.anchored_upto}`);
+      if (data.unanchored_tail !== null && data.unanchored_tail !== undefined) lines.push(`尾端未錨定：${data.unanchored_tail} 筆`);
+      if (data.bad_seq !== undefined) lines.push(`問題位置：序號 ${data.bad_seq}`);
+      if (data.max_seq !== undefined) lines.push(`帳本最大序號：${data.max_seq}`);
+      if (data.line !== undefined) lines.push(`錨點檔第 ${data.line} 行`);
+      lines.push(info[2]);
+      banner($("verify-result"), info[0], info[1], lines);
+    } catch (e) {
+      banner($("verify-result"), "b-bad", "無法連線到後端", [String(e)]);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "重新驗證";
+    }
+  }
+
+  async function anchor() {
+    const btn = $("anchor-btn");
+    btn.disabled = true;
+    btn.textContent = "建立中…";
+    try {
+      const res = await fetch("/api/anchor", { method: "POST" });
+      const data = await res.json();
+      const titles = {
+        ANCHORED: ["b-ok", "已建立錨點"],
+        UNCHANGED: ["b-info", "鏈頭沒有變化"],
+        REFUSED: ["b-bad", "拒絕建立錨點"],
+        SINK_UNREACHABLE: ["b-warn", "見證者無法使用，未建立錨點"],
+        ERROR: ["b-bad", "錯誤"],
+      };
+      const [cls, title] = titles[data.status] || ["b-warn", data.status];
+      const lines = [];
+      if (data.anchor) {
+        lines.push(`序號 ${data.anchor.seq}，鏈頭 ${short(data.anchor.head_hash, 16)}`);
+        lines.push(data.anchor.sink_ref ? `見證者：${data.anchor.sink_ref}` : "僅記錄在本機，尚未發布到見證者。");
+      }
+      if (data.detail) lines.push(data.detail);
+      banner($("anchor-result"), cls, title, lines);
+      await loadPaths();
+      await verify();
+    } catch (e) {
+      banner($("anchor-result"), "b-bad", "無法連線到後端", [String(e)]);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "建立錨點";
+    }
+  }
+
+  $("verify-btn").addEventListener("click", verify);
+  $("anchor-btn").addEventListener("click", anchor);
+  loadPaths();
+  verify();
+</script>
+</body>
+</html>

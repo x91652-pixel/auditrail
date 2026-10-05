@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -23,6 +24,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
         from .anchor import verify_anchors
 
         result = verify_anchors(args.ledger_path, args.anchors, sinks=_sinks(args.git_repo))
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result["status"] == "OK" else 1
         print(f"[{result['status']}] {result['detail']}")
         if result["anchored_upto"] is not None:
             print(f"  anchored up to seq={result['anchored_upto']}")
@@ -41,25 +45,32 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 1
 
 
+def _anchor_fail(args: argparse.Namespace, status: str, detail: str, code: int) -> int:
+    if args.json:
+        print(json.dumps({"status": status, "detail": detail}, ensure_ascii=False))
+    else:
+        print(f"[{status}] {detail}")
+    return code
+
+
 def cmd_anchor(args: argparse.Namespace) -> int:
     from .anchor import AnchorError, SinkUnreachable, anchor_ledger
 
     if not Path(args.ledger).is_file():
-        print(f"[ERROR] {args.ledger}: file not found (nothing to anchor)")
-        return 2
+        return _anchor_fail(args, "ERROR", f"{args.ledger}: file not found (nothing to anchor)", 2)
     if args.push and not args.git_repo:
-        print("[ERROR] --push requires --git-repo")
-        return 2
+        return _anchor_fail(args, "ERROR", "--push requires --git-repo", 2)
     sink = _sinks(args.git_repo).get("git")
     try:
         result = anchor_ledger(Ledger(args.ledger), args.anchors, sink=sink, push=args.push)
     except AnchorError as exc:
-        print(f"[REFUSED] {exc}")
-        return 1
+        return _anchor_fail(args, "REFUSED", str(exc), 1)
     except SinkUnreachable as exc:
-        print(f"[SINK_UNREACHABLE] {exc}. No anchor was recorded.")
-        return 1
+        return _anchor_fail(args, "SINK_UNREACHABLE", f"{exc}. No anchor was recorded.", 1)
     anchor = result["anchor"]
+    if args.json:
+        print(json.dumps({"status": result["status"], "anchor": anchor}, ensure_ascii=False))
+        return 0
     if result["status"] == "UNCHANGED":
         print(f"[UNCHANGED] chain head is already anchored at seq={anchor['seq']}; nothing added.")
     else:
@@ -97,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("ledger_path")
     p_verify.add_argument("--anchors", help="Also verify against an anchors.jsonl file (protocol §6).")
     p_verify.add_argument("--git-repo", help="Git witness repo to check anchors against (with --anchors).")
+    p_verify.add_argument("--json", action="store_true", help="Print the anchor verification result as JSON.")
     p_verify.set_defaults(func=cmd_verify)
 
     p_anchor = sub.add_parser("anchor", help="Record the current ledger head as an anchor, optionally publish it to a git witness.")
@@ -104,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_anchor.add_argument("--anchors", required=True)
     p_anchor.add_argument("--git-repo", help="Git witness repository.")
     p_anchor.add_argument("--push", action="store_true", help="Also push the witness commit (explicit opt-in).")
+    p_anchor.add_argument("--json", action="store_true", help="Print the result as JSON.")
     p_anchor.set_defaults(func=cmd_anchor)
 
     p_lint = sub.add_parser("lint", help="Validate a policy YAML file.")
