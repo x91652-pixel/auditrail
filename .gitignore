@@ -20,3 +20,6 @@ dashboard/target/
 
 # Local anchoring witness used by the dashboard demo (a git repo, never pushed)
 examples/demo_witness/
+
+*.lock
+target/

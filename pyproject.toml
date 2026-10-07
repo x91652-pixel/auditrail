@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auditrail"
-version = "0.1.0"
-description = "Tamper-evident audit trails and a lethal-trifecta policy guard for AI agents."
+version = "0.2.0"
+description = "Verifiable evidence for AI agents: signed, anchored audit trails and a lethal-trifecta policy guard."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

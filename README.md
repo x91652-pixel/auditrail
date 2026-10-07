@@ -5,7 +5,7 @@
 `pip install -e .` today; `pip install auditrail` once it's on PyPI (not yet -- see Status below).
 
 [![test](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml)
-![status](https://img.shields.io/badge/status-v0.1_proof--of--concept-orange)
+![status](https://img.shields.io/badge/status-v0.2_early-orange)
 ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 ## The problem
@@ -50,31 +50,68 @@ along the way** -- so when something does go wrong, you can prove what
 the agent saw, what it was allowed to do, and whether the record of that
 has been altered since.
 
-## What it actually does (v0.1)
+## What it actually does (v0.2)
 
-- **Lethal-trifecta policy engine** -- declare, per agent identity, which
-  tools it may call and what category each tool touches
-  (`data_access` / `untrusted_input` / `external_comm` / `agent_to_agent`).
-  A call that would complete all three categories in one session is
-  refused *before it executes*, not flagged after the fact.
-- **Hash-chained evidence ledger** -- every allowed, denied, or sandboxed
-  call is appended to a JSONL file where each record is chained to the
-  previous one's hash (the same construction Certificate Transparency
-  logs use). `auditrail verify` independently recomputes the chain and
-  tells you exactly where it breaks if a record was ever altered.
-- **Signed agent-to-agent messages** -- HMAC-SHA256 signatures with a
-  freshness window and replay protection for when one agent invokes
-  another as a tool (OWASP ASI07).
-- **Process-isolated execution** -- `isolate=True` runs a tool call in a
-  separate subprocess with secret-looking environment variables stripped
-  and a timeout, so a hung or runaway tool can't block the caller or
-  silently inherit ambient API keys.
+auditrail is the smallest component that lets someone who does **not** trust you
+check what an agent did. It is a library plus a standalone verifier, not a
+governance platform; it is meant to sit next to the gateways and guardrails you
+already use.
 
-**What it deliberately does not claim to do** -- prompt-injection
-detection, supply-chain verification, memory-poisoning detection, or
-certified regulatory compliance -- is documented honestly in
-[SECURITY.md](SECURITY.md). Read that before you decide whether this fits
-your threat model.
+- **Signed, hash-chained ledger.** Every record is chained to the previous one
+  and signed (Ed25519) by a recorder key the agent never sees. Editing a record
+  and recomputing the hashes -- which defeated v0.1 -- now fails verification.
+- **Anchors and witnesses.** The ledger head is published (signed) to a place the
+  operator cannot rewrite alone; a verifier with only the witness copy can then
+  prove nothing before it was removed or changed.
+- **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
+  the policy in force, and how many calls it intercepted vs. recorded, so silent
+  periods, tool/policy changes, and calls that ran without evidence show up.
+- **Independent verifier.** `verifier/` is a separate Rust program, written from the
+  [public format spec](docs/spec/evidence-format-v2.md) and tested against the same
+  conformance vectors as the Python code. One offline binary, no network.
+- **Lethal-trifecta policy by workflow.** A call that would complete
+  data-access + untrusted-input + external-comm is refused *before it runs*, counted
+  across a whole workflow (shared `trace_id`, or agents linked by a signed message
+  that carries the sender's categories), not just one session.
+- **Per-agent signed messages with receipts.** Each agent has its own key, so a
+  message is attributable and bound to its recipient. Both sides log it and
+  `auditrail reconcile` finds a message only one side recorded.
+- **Process-isolated execution** (`isolate=True`): allow-listed environment and a
+  timeout. Reduces accidents; it is **not** a security sandbox.
+
+What it deliberately does **not** do -- detect prompt injection, prove that
+unwrapped tools stayed quiet, protect you if the recorder key is stolen, or certify
+compliance -- is in [SECURITY.md](SECURITY.md). Read that before deciding whether
+it fits your threat model.
+
+## Evidence the operator cannot quietly rewrite
+
+```bash
+# 1. a recorder key, kept where the agent process cannot read it
+auditrail keygen --out keys/recorder
+
+# 2. run the recorder as its own process (ideally its own OS user or host);
+#    it holds the key and the ledger, and agents can only append through a socket
+export AUDITRAIL_RECORDER_TOKEN=change-me
+auditrail recorder --ledger evidence.jsonl --key keys/recorder.key \
+    --policy policies/example_policy.yaml --anchors anchors.jsonl \
+    --git-repo ../witness            # anchors are committed here; you push it somewhere you don't control
+```
+
+```python
+from auditrail import Guard, PolicyEngine, RemoteLedger
+guard = Guard(PolicyEngine.from_yaml("policies/example_policy.yaml"), RemoteLedger(port=8765))
+guard.start_heartbeats()             # the agent's own "still wrapped" signal
+```
+
+```bash
+# 3. anyone, offline, with only the PUBLIC key and a witness copy:
+auditrail-verify evidence.jsonl --pubkey keys/recorder.pub --witness witness-copy.jsonl --max-gap 120
+# (or `auditrail verify ...` with the same flags in Python)
+```
+
+The verifier prints `OK` only with a list of what it did **not** check (no key
+given, no witness, no heartbeat limit, records after the last anchor).
 
 ## Anchoring (protocol v1)
 
@@ -82,7 +119,7 @@ your threat model.
 the whole ledger, or cuts off its tail, still passes it. Anchoring periodically
 records the chain head (sequence number and hash, no tool arguments or results)
 and publishes it to a witness outside the ledger owner's sole control. The full
-specification is in `auditrail-docs/錨定協定.md`.
+specification is in `auditrail-docs/錨定協定.md`; the signed (v2) form is in [docs/spec/evidence-format-v2.md](docs/spec/evidence-format-v2.md).
 
 ```bash
 # record the current head; with --push, also push the witness commit
@@ -103,8 +140,9 @@ the start whose anchors were never stored externally; records that were never
 written at all; a compromised host making changes in real time; or a witness and
 the owner acting together. The git witness is only as strong as the place the
 repository lives. A repository the owner controls can be rewritten by that owner,
-so anchor hashes should also be copied to a third party periodically. There are no
-signatures, Merkle proofs, or RFC 3161 timestamps in this version.
+so anchor hashes should also be copied to a third party periodically. Anchors made
+with `--key` are signed (anchor_version 2, see [the format spec](docs/spec/evidence-format-v2.md));
+Merkle proofs and RFC 3161 timestamps are not implemented yet.
 
 ## Quickstart
 
@@ -174,8 +212,9 @@ narrow and meant to compose with things that already exist:
 
 ## Status
 
-v0.1 -- proof of concept, unreleased on PyPI, not yet used in production
-anywhere, no independent security review. Issues, and especially "this
+v0.2 -- early, unreleased on PyPI, not yet used in production anywhere, no
+independent security review. The format is a draft: expect changes until a second
+team has implemented it. Issues, and especially "this
 broke when I tried it against a real agent" reports, are exactly what
 this stage needs. See [ROADMAP.md](ROADMAP.md).
 
@@ -186,13 +225,15 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 66 Python tests are deterministic and require no network access or API key
+All 160 Python tests are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
-if you're offline). The Rust dashboard backend has its own tests:
-`cd dashboard && cargo test`.
+if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
+(runs every [conformance vector](docs/spec/vectors) through the independent verifier) and
+`cd dashboard && cargo test`. Python tests that compare against the Rust verifier are
+skipped until you run `cd verifier && cargo build --release`.
 
 To see the attack simulation (a fictional logistics company with five
-agents, 9 normal operations and 13 attacks, including the known gaps):
+agents, 9 normal operations and 16 attacks, including the known gaps):
 
 ```bash
 python -m examples.logistics_sim.run

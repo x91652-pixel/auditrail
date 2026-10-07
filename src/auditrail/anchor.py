@@ -1,8 +1,11 @@
 """Anchoring: publish the ledger head to a witness the ledger owner cannot rewrite alone.
 
-Implements auditrail-docs/錨定協定.md (v1). The ledger's own hash chain only proves
+Implements auditrail-docs/錨定協定.md (v1) and its signed extension (v2, see
+docs/spec/evidence-format-v2.md section 5). The ledger's own hash chain only proves
 internal consistency; an anchor records the chain head (seq + hash) at a point in
 time, and a witness stores a copy of that anchor outside the ledger's custody.
+A v2 anchor is also signed by the recorder key, so whoever holds the witness copy
+can check it without trusting the ledger owner's anchors file.
 Anchors contain only hashes and timestamps, never tool arguments or results.
 """
 from __future__ import annotations
@@ -12,14 +15,17 @@ import json
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from .keys import TAG_ANCHOR, Signer, verify_sig
 from .ledger import GENESIS_HASH, Ledger, _canonical
 
-ANCHOR_VERSION = 1
+ANCHOR_VERSION = 1  # unsigned
+SIGNED_ANCHOR_VERSION = 2
 NO_PREV_ANCHOR = GENESIS_HASH
 BODY_KEYS = ("anchor_version", "seq", "head_hash", "prev_anchor", "created_at")
-LINE_KEYS = set(BODY_KEYS) | {"anchor_hash", "sink_ref"}
+BODY_KEYS_BY_VERSION = {1: BODY_KEYS, 2: BODY_KEYS + ("key_id",)}
+LINE_KEYS = set(BODY_KEYS_BY_VERSION[2]) | {"anchor_hash", "sink_ref", "sig"}
 
 
 class AnchorError(Exception):
@@ -34,16 +40,25 @@ class SinkUnreachable(Exception):
     """The witness could not be reached or used. Not, by itself, evidence of tampering."""
 
 
-def _utc_now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def _utc_now(clock: Callable[[], float] = time.time) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
 
 
 def _anchor_hash(body: dict) -> str:
     return hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
 
 
-def build_anchor(ledger: Ledger, prev_anchor_hash: str = NO_PREV_ANCHOR) -> dict:
-    """Describe the current chain head as an anchor (protocol §3, §4.1, §4.3)."""
+def build_anchor(
+    ledger: Ledger,
+    prev_anchor_hash: str = NO_PREV_ANCHOR,
+    signer: Optional[Signer] = None,
+    clock: Callable[[], float] = time.time,
+) -> dict:
+    """Describe the current chain head as an anchor (protocol §3, §4.1, §4.3).
+
+    With a signer the anchor is version 2: key_id is part of the hashed body and
+    sig = Ed25519(TAG_ANCHOR + anchor_hash) sits outside it, like sink_ref.
+    """
     records = list(ledger)
     if not records:
         raise AnchorError("ledger is empty; refusing to anchor (protocol §4.1)")
@@ -55,16 +70,46 @@ def build_anchor(ledger: Ledger, prev_anchor_hash: str = NO_PREV_ANCHOR) -> dict
         )
     head = records[-1]
     body = {
-        "anchor_version": ANCHOR_VERSION,
+        "anchor_version": ANCHOR_VERSION if signer is None else SIGNED_ANCHOR_VERSION,
         "seq": head["seq"],
         "head_hash": head["hash"],
         "prev_anchor": prev_anchor_hash,
-        "created_at": _utc_now(),
+        "created_at": _utc_now(clock),
     }
-    return {**body, "anchor_hash": _anchor_hash(body)}
+    if signer is not None:
+        body["key_id"] = signer.key_id
+    anchor_hash = _anchor_hash(body)
+    out = {**body, "anchor_hash": anchor_hash}
+    if signer is not None:
+        out["sig"] = signer.sign(TAG_ANCHOR, anchor_hash.encode("ascii"))
+    return out
 
 
-def _parse_anchors(path: Path) -> tuple[list[dict], Optional[dict]]:
+def _check_anchor_line(rec: Any, public_keys: Optional[dict[str, str]]) -> Optional[tuple[str, str]]:
+    """Validate one anchor line on its own. Returns (status, detail) on failure."""
+    if not isinstance(rec, dict):
+        return "TAMPERED_ANCHOR", "malformed anchor line"
+    keys = BODY_KEYS_BY_VERSION.get(rec.get("anchor_version"))
+    if keys is None:
+        return "TAMPERED_ANCHOR", "unsupported anchor_version"
+    if any(k not in rec for k in keys):
+        return "TAMPERED_ANCHOR", "malformed anchor line"
+    if set(rec) - LINE_KEYS or (rec["anchor_version"] == 1 and "sig" in rec):
+        return "TAMPERED_ANCHOR", "unexpected fields in anchor line"
+    if rec.get("anchor_hash") != _anchor_hash({k: rec[k] for k in keys}):
+        return "TAMPERED_ANCHOR", "anchor_hash does not match body"
+    if rec["anchor_version"] == 2:
+        pub = (public_keys or {}).get(rec["key_id"])
+        if public_keys is not None and pub is None:
+            return "UNKNOWN_KEY", f"anchor is signed by key_id={rec['key_id']}, which is not in the trusted keys"
+        if pub is not None and not verify_sig(pub, TAG_ANCHOR, rec["anchor_hash"].encode("ascii"), rec.get("sig", "")):
+            return "BAD_SIGNATURE", "anchor signature does not verify"
+    elif public_keys is not None:
+        return "UNSIGNED_ANCHOR", "anchor is unsigned (version 1), but signatures are required"
+    return None
+
+
+def _parse_anchors(path: Path, public_keys: Optional[dict[str, str]] = None) -> tuple[list[dict], Optional[dict]]:
     """Return (anchors, problem). problem is set when the anchor chain (protocol §6.2) breaks."""
     if not path.exists():
         return [], None
@@ -75,16 +120,12 @@ def _parse_anchors(path: Path) -> tuple[list[dict], Optional[dict]]:
             continue
         try:
             rec = json.loads(raw)
-            body = {k: rec[k] for k in BODY_KEYS}
-        except (ValueError, KeyError, TypeError):
+        except ValueError:
             return anchors, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "malformed anchor line"}
-        if set(rec) - LINE_KEYS:
-            return anchors, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "unexpected fields in anchor line"}
-        if body["anchor_version"] != ANCHOR_VERSION:
-            return anchors, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "unsupported anchor_version"}
-        if rec.get("anchor_hash") != _anchor_hash(body):
-            return anchors, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "anchor_hash does not match body"}
-        if body["prev_anchor"] != prev:
+        bad = _check_anchor_line(rec, public_keys)
+        if bad is not None:
+            return anchors, {"status": bad[0], "line": lineno, "detail": bad[1]}
+        if rec["prev_anchor"] != prev:
             return anchors, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "prev_anchor does not link to the previous anchor"}
         prev = rec["anchor_hash"]
         anchors.append(rec)
@@ -94,11 +135,18 @@ def _parse_anchors(path: Path) -> tuple[list[dict], Optional[dict]]:
 def _append_line(path: Path, record: dict) -> None:
     """Append-only write (protocol §4.4). Existing lines are never touched."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
+    with path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(_canonical(record) + "\n")
 
 
-def anchor_ledger(ledger: Ledger, anchors_path: str | Path, sink: Any = None, push: bool = False) -> dict:
+def anchor_ledger(
+    ledger: Ledger,
+    anchors_path: str | Path,
+    sink: Any = None,
+    push: bool = False,
+    signer: Optional[Signer] = None,
+    clock: Callable[[], float] = time.time,
+) -> dict:
     """Create and record an anchor for the current head, if it is new (protocol §4.2).
 
     Order matters: the anchor is published to the witness first. The local
@@ -111,14 +159,14 @@ def anchor_ledger(ledger: Ledger, anchors_path: str | Path, sink: Any = None, pu
         raise AnchorError(f"anchors file fails verification ({problem['detail']} at line {problem['line']}); refusing to append")
 
     prev_hash = existing[-1]["anchor_hash"] if existing else NO_PREV_ANCHOR
-    anchor = build_anchor(ledger, prev_hash)
+    anchor = build_anchor(ledger, prev_hash, signer=signer, clock=clock)
 
     if existing and existing[-1]["head_hash"] == anchor["head_hash"] and existing[-1]["seq"] == anchor["seq"]:
         return {"status": "UNCHANGED", "anchor": existing[-1]}
 
     sink_ref = ""
     if sink is not None:
-        published_line = _canonical({k: anchor[k] for k in (*BODY_KEYS, "anchor_hash")})
+        published_line = _canonical({k: v for k, v in anchor.items() if k != "sink_ref"})
         sink_ref = sink.publish(published_line)
         if push:
             sink.push()
@@ -136,20 +184,28 @@ def _sink_for(sink_ref: str, sinks: dict) -> Any:
     return sinks.get(prefix)
 
 
-def verify_anchors(ledger_path: str | Path, anchors_path: str | Path, sinks: Optional[dict] = None) -> dict:
-    """Run the five checks of protocol §6 and report the first failure, or OK with coverage."""
+def verify_anchors(
+    ledger_path: str | Path,
+    anchors_path: str | Path,
+    sinks: Optional[dict] = None,
+    public_keys: Optional[dict[str, str]] = None,
+) -> dict:
+    """Run the five checks of protocol §6 and report the first failure, or OK with coverage.
+
+    With public_keys, the ledger records and every anchor must also carry valid signatures.
+    """
     sinks = sinks or {}
     ledger_path = Path(ledger_path)
     records: list[dict] = []
     if ledger_path.exists():
         ledger = Ledger(ledger_path)
-        ok, bad_seq = ledger.verify()  # §6.1
+        ok, bad_seq = ledger.verify(public_keys=public_keys)  # §6.1
         if not ok:
             return _report("TAMPERED_LEDGER", f"ledger hash chain breaks at seq={bad_seq}", bad_seq=bad_seq)
         records = list(ledger)
     max_seq = records[-1]["seq"] if records else None
 
-    anchors, problem = _parse_anchors(Path(anchors_path))  # §6.2
+    anchors, problem = _parse_anchors(Path(anchors_path), public_keys)  # §6.2
     if problem is not None:
         return _report(problem["status"], problem["detail"], line=problem["line"])
 
@@ -182,6 +238,44 @@ def verify_anchors(ledger_path: str | Path, anchors_path: str | Path, sinks: Opt
     return _report("OK", detail, anchored_upto=anchored_upto, unanchored_tail=tail)
 
 
+def verify_witness_file(records: list[dict], witness_path: str | Path, public_keys: Optional[dict[str, str]] = None) -> dict:
+    """Check a copy of what a witness holds against the ledger, without the owner's anchors file.
+
+    This is the check a third party runs: they kept (or fetched) the published
+    anchor lines, so the ledger owner's own anchors.jsonl does not matter. Each
+    line must be a genuine anchor (hash, and signature when keys are given) and
+    must still match the ledger at its seq.
+    """
+    path = Path(witness_path)
+    if not path.exists():
+        return _report("SINK_UNREACHABLE", f"witness file not found: {path}")
+    by_seq = {r["seq"]: r for r in records}
+    max_seq = records[-1]["seq"] if records else None
+    upto = None
+    count = 0
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            return _report("TAMPERED_ANCHOR", "malformed line in witness file", line=lineno)
+        bad = _check_anchor_line(rec, public_keys)
+        if bad is not None:
+            return _report(bad[0], f"witness file: {bad[1]}", line=lineno)
+        led = by_seq.get(rec["seq"])
+        if led is None:
+            return _report("TRUNCATED", f"ledger ends at seq={max_seq}, but the witness holds an anchor for seq={rec['seq']}",
+                           max_seq=max_seq)
+        if led["hash"] != rec["head_hash"]:
+            return _report("REWRITTEN", f"record at witnessed seq={rec['seq']} no longer matches the published head_hash",
+                           bad_seq=rec["seq"])
+        upto = rec["seq"] if upto is None else max(upto, rec["seq"])
+        count += 1
+    tail = len(records) - (upto + 1) if upto is not None else len(records)
+    return _report("OK", f"{count} witnessed anchor(s) match the ledger", anchored_upto=upto, unanchored_tail=tail)
+
+
 class FileSink:
     """Local-file witness. For tests only: no external evidentiary value (protocol §5.2)."""
 
@@ -192,7 +286,7 @@ class FileSink:
 
     def publish(self, anchor_line: str) -> str:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as f:
+        with self.path.open("a", encoding="utf-8", newline="\n") as f:
             f.write(anchor_line + "\n")
         return f"file:{self.path.name}"
 
@@ -247,7 +341,7 @@ class GitSink:
         target = self.repo / Path(self.RELPATH)
         target.parent.mkdir(parents=True, exist_ok=True)
         size_before = target.stat().st_size if target.exists() else 0
-        with target.open("a", encoding="utf-8") as f:
+        with target.open("a", encoding="utf-8", newline="\n") as f:
             f.write(anchor_line + "\n")
         try:
             parsed = json.loads(anchor_line)

@@ -1,0 +1,10 @@
+{
+  "anchored_upto": 6,
+  "args": {
+    "max_gap_s": 60,
+    "require_signatures": true,
+    "witness": "witness.jsonl"
+  },
+  "status": "OK",
+  "unanchored_tail": 0
+}

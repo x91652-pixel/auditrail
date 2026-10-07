@@ -34,3 +34,27 @@ jobs:
           workspaces: dashboard
       - run: cargo test --locked
       - run: cargo build --release
+
+  verifier:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: verifier
+      # Python and Rust must agree on every conformance vector, and the vectors must be reproducible.
+      - run: pip install -e ".[dev]"
+      - run: python docs/spec/vectors/generate.py
+      - run: git diff --exit-code -- docs/spec/vectors
+      - run: cargo test
+        working-directory: verifier
+      - run: cargo build --release
+        working-directory: verifier
+      - run: pytest tests/test_vectors.py tests/test_rust_verifier.py -v

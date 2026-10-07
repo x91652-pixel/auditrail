@@ -144,7 +144,21 @@ def test_exception_in_a_tool_is_logged_as_error_and_reraised(guard):
         boom(s)
     rec = next(iter(guard.ledger))
     assert rec["decision"] == "error"
-    assert "kaboom" in rec["reason"]
+    # exception messages often echo raw arguments, so by default only the type + a digest is kept
+    assert rec["reason"].startswith("ValueError")
+    assert "kaboom" not in rec["reason"]
+
+
+def test_error_text_is_recorded_only_when_opted_in(tmp_path):
+    guard = Guard(PolicyEngine(POLICY), Ledger(tmp_path / "l.jsonl"), record_error_text=True)
+
+    @guard.guarded_tool("boom")
+    def boom():
+        raise ValueError("kaboom")
+
+    with pytest.raises(ValueError):
+        boom(guard.session("a"))
+    assert "kaboom" in next(iter(guard.ledger))["reason"]
 
 
 def test_failed_call_still_counts_toward_trifecta_state(guard):

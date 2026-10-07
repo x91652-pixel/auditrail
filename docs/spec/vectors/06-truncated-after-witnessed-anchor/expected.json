@@ -1,0 +1,7 @@
+{
+  "args": {
+    "require_signatures": true,
+    "witness": "witness.jsonl"
+  },
+  "status": "TRUNCATED"
+}

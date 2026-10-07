@@ -1,54 +1,58 @@
 # Roadmap
 
-v0.1 is deliberately narrow: a hash-chained ledger, a lethal-trifecta
-policy engine, signed agent-to-agent messages, and a best-effort process
-sandbox. Below is what's next, roughly in the order the underlying
-research report ranked them by (severity x how unmet the need still is).
+v0.2 closes the biggest gap in v0.1: a hash chain anyone with write access could
+recompute. It now has recorder signatures, signed anchors with a witness, heartbeats,
+an independent verifier, workflow-level policy, and per-agent signed messages.
+What is left is mostly about *where the trust lives* and *what the evidence covers*.
 
-## Near term
+## Done in v0.2
 
-- **Container-based isolation.** Swap the subprocess sandbox for an
-  actual containment boundary (Docker with dropped capabilities, or
-  gVisor/Firecracker for stronger guarantees) as an opt-in `isolate="container"`
-  mode, so `isolate=True` can eventually mean what people assume it means.
-- **Redundant ledger custody.** Optional streaming of each record to
-  append-only external storage (S3 Object Lock, a write-only collector
-  service) as it's written, so `verify()`'s "nothing altered" guarantee
-  is paired with an independent "nothing removed" guarantee.
-- **Policy hot-reload + versioned snapshots.** Right now a policy change
-  requires restarting the process; evidence records already capture
-  `policy_version`, but there's no built-in way to pin/diff policy
-  versions over time.
-- **PyPI release** once the API has had a few real integrations shake
-  out rough edges.
+- Ed25519-signed records and anchors; the verifier requires them when given a key.
+- `auditrail recorder` / `RemoteLedger`: the key and ledger live in a separate process.
+- Heartbeats (wrapped tools, policy hash, intercepted-vs-recorded counts) and gap checks.
+- Anchors to a git or file witness; verification from a witness copy alone.
+- Independent Rust verifier and a public format spec with ten conformance vectors.
+- Trifecta tracking per workflow, and signed messages that carry categories.
+- Per-agent keys, receipts, and `reconcile` for two-sided cross-checking.
+- Isolation environment is an allow-list; tool output cannot corrupt or forge a result.
+- Error text is a digest by default; the ledger is safe for concurrent writers.
 
-## Medium term
+## Next (in this order, and each one needs a user or a reviewer to be worth building)
 
-- **Public-key agent identity.** `agent_bridge.py` uses a pre-shared
-  HMAC secret, which doesn't scale past "both sides are in the same
-  trust domain." A public-key (e.g. Ed25519) scheme would let
-  cross-organization agents verify each other without sharing a secret.
-- **OpenTelemetry GenAI semantic-conventions export**, so evidence
-  records can flow into existing observability stacks instead of only
-  living in a standalone ledger file.
-- **Regulatory field mapping.** A `--map ll144` / `--map eu-ai-act`
-  style CLI flag that annotates ledger records with the specific
-  clauses they support, instead of leaving that mapping to the reader.
-- **Data & model supply-chain checks (ASI04).** Verifying model/prompt
-  provenance is out of scope for v0.1's runtime guard; a separate
-  companion tool is more likely than bolting it onto this one.
+1. **Independent review of the format and recorder.** Nothing here has been audited.
+   A second implementation of the verifier by someone else is worth more than any feature.
+2. **One real witness beyond git.** An RFC 3161 timestamp or a transparency-log entry for
+   anchors, so a witness is not only "a repository the operator might also control".
+3. **Guard-gate architecture helper.** Completeness needs the agent to hold *no* outbound
+   credential except through the guard. A reference deployment (proxy that holds the
+   credentials, recorder as another OS user) turns "unwrapped tools" from a footnote into
+   something you can test.
+4. **Reconcile against the called system.** Import the other side's log (API provider,
+   SaaS audit log) and report calls the ledger never recorded.
+5. **Merkle tree and consistency proofs.** Single-record inclusion proofs and
+   checkpoints, so a verifier does not need the whole file. Only worth it at volume.
+6. **Container isolation** (`isolate="container"`): Docker with dropped capabilities, or
+   gVisor/Firecracker. Until then `isolate=True` is blast-radius reduction, not a boundary.
+7. **Optional encrypted retention of arguments/results**, chosen by the customer, for
+   forensics that digests cannot support.
+8. **Shared replay store** (Redis or a database) for multi-process agents.
 
-## Explicitly not planned (for now)
+## Exploring (needs interviews before any code)
 
-- **Prompt-injection content classification.** There are already
-  dedicated products for this (see the research report's landscape
-  chapter); auditrail's bet is that *constraining what a session can do*
-  is a more durable defense than *detecting malicious text*, and the two
-  are complementary rather than substitutes.
-- **Becoming a hosted SaaS in v0.1.** The library stays usable
-  standalone; a hosted dashboard/service is a possible later layer, not
-  a prerequisite for the core to be useful.
+- Whether auditors, security leads, or agent-product teams will actually pay, and for what.
+  The stop condition and the interview plan are in the positioning paper.
+- Agent-to-agent evidence as the first wedge: only if a real two-agent deployment turns up.
+- Robot fleets: an independent recorder subscribing to a fleet-interop message bus
+  (e.g. VDA 5050 over MQTT) is plausible; it needs the standard's signing story checked first.
+  High-frequency control loops and hardware roots of trust are out of scope.
 
-Have an opinion on the ordering above, or a real integration that broke
-in an interesting way? Open an issue -- this roadmap is meant to be
-argued with.
+## Explicitly not planned
+
+- **Prompt-injection or steganography detection.** There are dedicated products, and for
+  steganography there is no technique with a guarantee. auditrail constrains what a
+  session can *do* and keeps evidence for after-the-fact analysis.
+- **Becoming a hosted platform.** The library and verifier stay usable standalone.
+- **Claiming compliance.** Mapping fields to regulation clauses may come; certification will not.
+
+Have an opinion on the ordering, or a real integration that broke in an interesting
+way? Open an issue -- this roadmap is meant to be argued with.
