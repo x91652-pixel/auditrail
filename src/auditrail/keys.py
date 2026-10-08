@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
+from ._strict import is_hex
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
@@ -80,6 +81,10 @@ class Signer:
 
 
 def verify_sig(public_hex: str, tag: bytes, message: bytes, sig_hex: str) -> bool:
+    # Exactly 128 lowercase hex characters. bytes.fromhex would also accept spaces and capitals,
+    # which would let a signature be altered without invalidating it.
+    if not is_hex(sig_hex, 128):
+        return False
     try:
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex)).verify(bytes.fromhex(sig_hex), tag + message)
         return True

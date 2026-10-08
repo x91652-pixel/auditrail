@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from . import _strict
+from ._strict import is_int
 from .keys import TAG_ANCHOR, Signer, verify_sig
 from .ledger import GENESIS_HASH, Ledger, _canonical
 
@@ -87,18 +89,27 @@ def build_anchor(
 
 def _check_anchor_line(rec: Any, public_keys: Optional[dict[str, str]]) -> Optional[tuple[str, str]]:
     """Validate one anchor line on its own. Returns (status, detail) on failure."""
+    tam = lambda d: ("TAMPERED_ANCHOR", d)  # noqa: E731
     if not isinstance(rec, dict):
-        return "TAMPERED_ANCHOR", "malformed anchor line"
-    keys = BODY_KEYS_BY_VERSION.get(rec.get("anchor_version"))
+        return tam("malformed anchor line")
+    version = rec.get("anchor_version")
+    keys = BODY_KEYS_BY_VERSION.get(version) if is_int(version) else None
     if keys is None:
-        return "TAMPERED_ANCHOR", "unsupported anchor_version"
+        return tam("unsupported anchor_version")
     if any(k not in rec for k in keys):
-        return "TAMPERED_ANCHOR", "malformed anchor line"
-    if set(rec) - LINE_KEYS or (rec["anchor_version"] == 1 and "sig" in rec):
-        return "TAMPERED_ANCHOR", "unexpected fields in anchor line"
+        return tam("malformed anchor line")
+    allowed = set(keys) | {"anchor_hash", "sink_ref"} | ({"sig"} if version == 2 else set())
+    if set(rec) - allowed:
+        return tam("unexpected fields in anchor line")
+    if not is_int(rec["seq"]) or rec["seq"] < 0:
+        return tam("malformed anchor line")
+    if not all(isinstance(rec[k], str) for k in keys if k not in ("anchor_version", "seq")):
+        return tam("malformed anchor line")
+    if "sink_ref" in rec and not isinstance(rec["sink_ref"], str):
+        return tam("malformed anchor line")
     if rec.get("anchor_hash") != _anchor_hash({k: rec[k] for k in keys}):
-        return "TAMPERED_ANCHOR", "anchor_hash does not match body"
-    if rec["anchor_version"] == 2:
+        return tam("anchor_hash does not match body")
+    if version == 2:
         pub = (public_keys or {}).get(rec["key_id"])
         if public_keys is not None and pub is None:
             return "UNKNOWN_KEY", f"anchor is signed by key_id={rec['key_id']}, which is not in the trusted keys"
@@ -109,19 +120,28 @@ def _check_anchor_line(rec: Any, public_keys: Optional[dict[str, str]]) -> Optio
     return None
 
 
+def _anchor_lines(path: Path) -> tuple[list[tuple[int, dict]], Optional[dict]]:
+    """Strictly read a JSONL anchor file. Returns ([(line number, object)], problem)."""
+    text = _strict.decode(path.read_bytes())
+    if text is None:
+        return [], {"status": "TAMPERED_ANCHOR", "line": 0, "detail": "anchor file is not valid UTF-8"}
+    out: list[tuple[int, dict]] = []
+    for lineno, raw in _strict.lines(text):
+        try:
+            out.append((lineno, _strict.parse_object(raw)))
+        except ValueError:
+            return out, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "malformed anchor line"}
+    return out, None
+
+
 def _parse_anchors(path: Path, public_keys: Optional[dict[str, str]] = None) -> tuple[list[dict], Optional[dict]]:
     """Return (anchors, problem). problem is set when the anchor chain (protocol §6.2) breaks."""
     if not path.exists():
         return [], None
     anchors: list[dict] = []
     prev = NO_PREV_ANCHOR
-    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not raw.strip():
-            continue
-        try:
-            rec = json.loads(raw)
-        except ValueError:
-            return anchors, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "malformed anchor line"}
+    parsed, problem = _anchor_lines(path)
+    for lineno, rec in parsed:
         bad = _check_anchor_line(rec, public_keys)
         if bad is not None:
             return anchors, {"status": bad[0], "line": lineno, "detail": bad[1]}
@@ -129,6 +149,8 @@ def _parse_anchors(path: Path, public_keys: Optional[dict[str, str]] = None) -> 
             return anchors, {"status": "TAMPERED_ANCHOR", "line": lineno, "detail": "prev_anchor does not link to the previous anchor"}
         prev = rec["anchor_hash"]
         anchors.append(rec)
+    if problem is not None:
+        return anchors, problem
     return anchors, None
 
 
@@ -253,13 +275,8 @@ def verify_witness_file(records: list[dict], witness_path: str | Path, public_ke
     max_seq = records[-1]["seq"] if records else None
     upto = None
     count = 0
-    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not raw.strip():
-            continue
-        try:
-            rec = json.loads(raw)
-        except ValueError:
-            return _report("TAMPERED_ANCHOR", "malformed line in witness file", line=lineno)
+    parsed, problem = _anchor_lines(path)
+    for lineno, rec in parsed:
         bad = _check_anchor_line(rec, public_keys)
         if bad is not None:
             return _report(bad[0], f"witness file: {bad[1]}", line=lineno)
@@ -272,6 +289,8 @@ def verify_witness_file(records: list[dict], witness_path: str | Path, public_ke
                            bad_seq=rec["seq"])
         upto = rec["seq"] if upto is None else max(upto, rec["seq"])
         count += 1
+    if problem is not None:
+        return _report("TAMPERED_ANCHOR", f"witness file: {problem['detail']}", line=problem["line"])
     tail = len(records) - (upto + 1) if upto is not None else len(records)
     return _report("OK", f"{count} witnessed anchor(s) match the ledger", anchored_upto=upto, unanchored_tail=tail)
 

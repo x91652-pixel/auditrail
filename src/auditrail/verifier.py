@@ -1,8 +1,10 @@
-"""Full, offline verification of an evidence ledger (spec section 7).
+"""Full, offline verification of an evidence ledger (spec section 6).
 
 Order of checks, stopping at the first failure:
   1. chain        every record's seq, prev_hash and hash recompute correctly
   2. signatures   with public keys given, every record is signed by a known key
+     (1 and 2 run per record, so a record is judged before the next one is looked at;
+      each record must then pass the field checks of spec section 3)
   3. anchors      the local anchors file, if given (anchor.verify_anchors)
   4. witness      a copy of what was published to a witness, if given: each
                   published anchor is genuine and still matches the ledger
@@ -11,17 +13,17 @@ Order of checks, stopping at the first failure:
 Then, on success, the report lists what changed over time (tool set, policy
 hash) and what is NOT covered (records after the last anchor).
 
-verifier/ (Rust) implements the same checks independently; the test vectors in
-docs/spec/vectors/ must give the same status in both.
+How files are read is fixed by _strict.py, so that this and the Rust verifier
+(verifier/) cannot disagree about an odd input. The test vectors in
+docs/spec/vectors/ and tests/test_fuzz.py hold them to the same answers.
 """
 from __future__ import annotations
 
-import calendar
-import json
 import time
 from pathlib import Path
 from typing import Any, Optional
 
+from . import _strict
 from .keys import TAG_RECORD, verify_sig
 from .ledger import GENESIS_HASH, record_hash
 
@@ -30,27 +32,46 @@ def _fail(status: str, detail: str, **extra: Any) -> dict:
     return {"status": status, "detail": detail, **extra}
 
 
-def _read_records(path: Path) -> tuple[list[dict], Optional[dict]]:
+def parse_ledger_bytes(data: bytes) -> tuple[list[dict], Optional[dict]]:
+    """Strictly parse a ledger file's bytes into records, or return the problem."""
+    text = _strict.decode(data)
+    if text is None:
+        return [], _fail("TAMPERED_LEDGER", "ledger file is not valid UTF-8")
     records: list[dict] = []
-    if not path.exists():
-        return records, None
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-                if not isinstance(rec, dict):
-                    raise ValueError("record is not a JSON object")
-            except ValueError:
-                return records, _fail("TAMPERED_LEDGER", f"record #{len(records)} is not valid JSON", bad_seq=len(records))
-            records.append(rec)
+    for lineno, line in _strict.lines(text):
+        try:
+            records.append(_strict.parse_object(line))
+        except ValueError as exc:
+            return records, _fail("TAMPERED_LEDGER", f"record #{len(records)} (line {lineno}) is not an acceptable JSON object: {exc}",
+                                  bad_seq=len(records))
     return records, None
 
 
+def _read_records(path: Path) -> tuple[list[dict], Optional[dict]]:
+    if not path.exists():
+        return [], None
+    return parse_ledger_bytes(path.read_bytes())
+
+
+def _check_fields(rec: dict, seq: int) -> Optional[dict]:
+    """Per-record field rules (spec section 3). Runs after the hash and signature hold."""
+    bad = lambda d: _fail("MALFORMED_RECORD", f"seq={seq}: {d}", bad_seq=seq)  # noqa: E731
+    if _strict.parse_ts(rec.get("ts")) is None:
+        return bad("ts is not a valid UTC timestamp (YYYY-MM-DDTHH:MM:SSZ)")
+    kind = rec.get("kind", "call")
+    if not isinstance(kind, str):
+        return bad("kind is not a string")
+    if kind == "heartbeat":
+        tools = rec.get("tools")
+        if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
+            return bad("heartbeat tools is not a list of strings")
+        if not _strict.is_int(rec.get("calls_attempted")) or not _strict.is_int(rec.get("calls_recorded")):
+            return bad("heartbeat call counts are not integers")
+    return None
+
+
 def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Optional[list[dict]] = None) -> Optional[dict]:
-    """Checks 1 and 2. Returns None when the chain (and signatures, if keys given) hold.
+    """Checks 1 and 2 (plus the field rules). Returns None when everything holds.
 
     When public_keys is given, EVERY record must be signed by one of them. An
     unsigned record is a failure, not a pass: otherwise an attacker could rewrite
@@ -62,7 +83,7 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
             return problem
     prev = GENESIS_HASH
     for expected, rec in enumerate(records):
-        if rec.get("seq") != expected:
+        if not _strict.is_int(rec.get("seq")) or rec["seq"] != expected:
             return _fail("TAMPERED_LEDGER", f"expected seq={expected}, found seq={rec.get('seq')!r}", bad_seq=expected)
         if rec.get("prev_hash") != prev:
             return _fail("TAMPERED_LEDGER", f"seq={expected}: prev_hash does not link to the previous record", bad_seq=expected)
@@ -71,52 +92,50 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
             return _fail("TAMPERED_LEDGER", f"seq={expected}: hash does not match the record's contents", bad_seq=expected)
         if public_keys is not None:
             key_id, sig = rec.get("key_id"), rec.get("sig")
-            if not key_id or not sig:
+            if not isinstance(key_id, str) or not key_id or not isinstance(sig, str) or not sig:
                 return _fail("UNSIGNED_RECORD", f"seq={expected} carries no signature, but signatures are required", bad_seq=expected)
             pub = public_keys.get(key_id)
             if pub is None:
                 return _fail("UNKNOWN_KEY", f"seq={expected} is signed by key_id={key_id}, which is not in the trusted keys", bad_seq=expected)
             if not verify_sig(pub, TAG_RECORD, stored.encode("ascii"), sig):
                 return _fail("BAD_SIGNATURE", f"seq={expected}: signature does not verify", bad_seq=expected)
+        problem = _check_fields(rec, expected)
+        if problem is not None:
+            return problem
         prev = stored
     return None
 
 
-def _epoch(ts: str) -> int:
-    return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+def _fmt(epoch: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
 
 
 def check_heartbeats(records: list[dict], max_gap_s: int) -> tuple[Optional[dict], list[dict]]:
-    """Check 5. Returns (problem, changes)."""
+    """Check 5. Returns (problem, changes). Assumes check_chain already passed."""
     beats = [r for r in records if r.get("kind") == "heartbeat"]
     changes: list[dict] = []
-    if not beats:
-        if records:
-            return _fail("NO_HEARTBEAT", "a maximum gap was given but the ledger has no heartbeat records"), changes
+    if not beats and records:
+        return _fail("NO_HEARTBEAT", "a maximum gap was given but the ledger has no heartbeat records"), changes
 
-    # gaps: start -> first beat, beat -> beat, last beat -> last record
-    points = [_epoch(records[0]["ts"])] if records else []
-    points += [_epoch(b["ts"]) for b in beats]
+    # gaps: first record -> each heartbeat -> last record
+    points = [_strict.parse_ts(records[0]["ts"])] if records else []
+    points += [_strict.parse_ts(b["ts"]) for b in beats]
     if records:
-        points.append(_epoch(records[-1]["ts"]))
-    gaps = []
-    for a, b in zip(points, points[1:]):
-        if b - a > max_gap_s:
-            gaps.append({"from": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(a)),
-                         "to": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(b)), "seconds": b - a})
+        points.append(_strict.parse_ts(records[-1]["ts"]))
+    gaps = [{"from": _fmt(a), "to": _fmt(b), "seconds": b - a} for a, b in zip(points, points[1:]) if b - a > max_gap_s]
 
     # every writer reports how many calls it intercepted vs. managed to record
     for b in beats:
-        if b.get("calls_attempted") != b.get("calls_recorded"):
+        if b["calls_attempted"] != b["calls_recorded"]:
             return _fail("UNRECORDED_CALLS",
-                         f"heartbeat seq={b['seq']} from {b.get('recorder_id')!r}: {b.get('calls_attempted')} call(s) "
-                         f"intercepted but only {b.get('calls_recorded')} recorded", bad_seq=b["seq"]), changes
+                         f"heartbeat seq={b['seq']} from {b.get('recorder_id')!r}: {b['calls_attempted']} call(s) "
+                         f"intercepted but only {b['calls_recorded']} recorded", bad_seq=b["seq"]), changes
 
     prev = None
     for b in beats:
         if prev is not None:
-            added = sorted(set(b.get("tools", [])) - set(prev.get("tools", [])))
-            removed = sorted(set(prev.get("tools", [])) - set(b.get("tools", [])))
+            added = sorted(set(b["tools"]) - set(prev["tools"]))
+            removed = sorted(set(prev["tools"]) - set(b["tools"]))
             policy_changed = b.get("policy_hash") != prev.get("policy_hash")
             if added or removed or policy_changed:
                 changes.append({"seq": b["seq"], "ts": b["ts"], "tools_added": added, "tools_removed": removed,

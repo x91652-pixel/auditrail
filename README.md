@@ -225,12 +225,17 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 160 Python tests are deterministic and require no network access or API key
+All 227 Python tests are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and
 `cd dashboard && cargo test`. Python tests that compare against the Rust verifier are
 skipped until you run `cd verifier && cargo build --release`.
+
+The two verifiers are also fuzzed against each other (`tests/test_fuzz.py`, Hypothesis; raise the sample size with
+`AUDITRAIL_FUZZ_EXAMPLES=500`): random ledgers, field edits, raw byte corruption, re-hash attacks, truncation and garbage
+must give the same status in Python and Rust, and never a crash. `tests/test_reader_agreement.py` pins down the odd
+inputs (non-UTF-8, `-0`, `true` as an integer, signatures with a space, ...) one by one.
 
 To see the attack simulation (a fictional logistics company with five
 agents, 9 normal operations and 16 attacks, including the known gaps):

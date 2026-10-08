@@ -52,16 +52,24 @@ def _canonical(record: dict) -> str:
     return json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _check_no_floats(obj: Any) -> None:
-    """v2 records contain no floats, so every verifier can reproduce the canonical bytes."""
+def _check_no_floats(obj: Any, depth: int = 1) -> None:
+    """v2 records contain only what every verifier can reproduce byte for byte: no floats,
+    integers within signed 64 bits, no lone surrogates, nesting depth <= 64."""
     if isinstance(obj, float):
         raise TypeError("format v2 records must not contain floats (use integers)")
+    if type(obj) is int and not (-(2 ** 63) <= obj <= 2 ** 63 - 1):
+        raise TypeError("format v2 integers must fit in signed 64 bits (use a string for larger values)")
+    if isinstance(obj, str):
+        obj.encode("utf-8")  # a lone surrogate cannot be written as UTF-8
+    if depth > 64:
+        raise TypeError("format v2 records must not nest deeper than 64 levels")
     if isinstance(obj, dict):
-        for v in obj.values():
-            _check_no_floats(v)
+        for k, v in obj.items():
+            _check_no_floats(k, depth + 1)
+            _check_no_floats(v, depth + 1)
     elif isinstance(obj, (list, tuple)):
         for v in obj:
-            _check_no_floats(v)
+            _check_no_floats(v, depth + 1)
 
 
 def record_hash(prev_hash: str, record: dict) -> str:

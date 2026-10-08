@@ -2,10 +2,11 @@
 //!
 //!   auditrail-verify LEDGER [--pubkey FILE]... [--anchors FILE] [--witness FILE] [--max-gap SECONDS] [--json]
 //!
-//! Exit code 0 only when every requested check passes. Anything it was not asked
-//! to check is listed under "not checked", never silently treated as passed.
+//! Exit code 0 only when every requested check passes; 1 when a check fails;
+//! 2 when a file cannot be read at all. Anything it was not asked to check is
+//! listed under "not checked", never silently treated as passed.
 
-use auditrail_verify::{key_id_for, parse_pubkey_hex, verify, Options};
+use auditrail_verify::{key_id_for, parse_pubkey_hex, verify_bytes, Options};
 use std::{collections::HashMap, fs, process::ExitCode};
 
 fn usage() -> ExitCode {
@@ -13,8 +14,8 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
-fn read(path: &str) -> Result<String, ExitCode> {
-    fs::read_to_string(path).map_err(|e| {
+fn read(path: &str) -> Result<Vec<u8>, ExitCode> {
+    fs::read(path).map_err(|e| {
         eprintln!("[ERROR] {path}: {e}");
         ExitCode::from(2)
     })
@@ -35,11 +36,11 @@ fn main() -> ExitCode {
             "--json" => json = true,
             "--pubkey" => {
                 let Some(p) = value() else { return usage() };
-                let text = match read(&p) {
+                let bytes = match read(&p) {
                     Ok(t) => t,
                     Err(c) => return c,
                 };
-                match parse_pubkey_hex(&text) {
+                match parse_pubkey_hex(&String::from_utf8_lossy(&bytes)) {
                     Ok(raw) => {
                         keys.insert(key_id_for(&raw), raw);
                     }
@@ -51,14 +52,14 @@ fn main() -> ExitCode {
             }
             "--anchors" | "--witness" => {
                 let Some(p) = value() else { return usage() };
-                let text = match read(&p) {
+                let bytes = match read(&p) {
                     Ok(t) => t,
                     Err(c) => return c,
                 };
                 if flag == "--anchors" {
-                    opts.anchors = Some(text);
+                    opts.anchors = Some(bytes);
                 } else {
-                    opts.witness = Some(text);
+                    opts.witness = Some(bytes);
                 }
             }
             "--max-gap" => match value().and_then(|v| v.parse::<i64>().ok()) {
@@ -75,7 +76,7 @@ fn main() -> ExitCode {
         Ok(t) => t,
         Err(c) => return c,
     };
-    let report = verify(&ledger, &opts);
+    let report = verify_bytes(&ledger, &opts);
 
     let mut not_checked = Vec::new();
     if opts.public_keys.is_none() {

@@ -158,6 +158,27 @@ def main() -> None:
     rewrite(d / "ledger.jsonl", lambda r: r.__setitem__(slice(2, 4), [r[3], r[2]]), rehash=False)
     write_expected(d, {"status": "TAMPERED_LEDGER", "bad_seq": 2}, {})
 
+    # 11. hashed and signed correctly, but a field the format constrains is nonsense (Feb 30)
+    d = OUT / "11-malformed-timestamp"
+    build(d, signer, Clock())
+    rewrite(d / "ledger.jsonl", lambda r: r[2].update(ts="2026-02-30T00:00:00Z"), rehash=True)
+    write_expected(d, {"status": "MALFORMED_RECORD", "bad_seq": 2}, {})
+
+    # 12. a float where only integers are allowed: rejected while parsing, before any hash is looked at
+    d = OUT / "12-float-in-record"
+    build(d, signer, Clock())
+    text = (d / "ledger.jsonl").read_text(encoding="utf-8")
+    assert '"duration_us":1500' in text
+    put(d / "ledger.jsonl", text.replace('"duration_us":1500', '"duration_us":1500.0', 1))
+    write_expected(d, {"status": "TAMPERED_LEDGER", "bad_seq": 1}, {})
+
+    # 13. not UTF-8
+    d = OUT / "13-not-utf8"
+    build(d, signer, Clock())
+    data = (d / "ledger.jsonl").read_bytes()
+    (d / "ledger.jsonl").write_bytes(data[:100] + b"\xff\xfe" + data[100:])
+    write_expected(d, {"status": "TAMPERED_LEDGER"}, {})
+
     for lock in OUT.rglob("*.lock"):
         lock.unlink()
     print(f"wrote {sum(1 for p in OUT.iterdir() if p.is_dir())} cases to {OUT}")

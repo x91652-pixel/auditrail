@@ -29,11 +29,11 @@ fn every_vector_matches_its_expected_result() {
             opts.public_keys = Some(HashMap::from([(key_id_for(&raw), raw)]));
         }
         if let Some(w) = args["witness"].as_str() {
-            opts.witness = Some(fs::read_to_string(case.join(w)).unwrap());
+            opts.witness = Some(fs::read(case.join(w)).unwrap());
         }
         opts.max_gap_s = args["max_gap_s"].as_i64();
 
-        let got = verify(&fs::read_to_string(case.join("ledger.jsonl")).unwrap(), &opts);
+        let got = auditrail_verify::verify_bytes(&fs::read(case.join("ledger.jsonl")).unwrap(), &opts);
         let name = case.file_name().unwrap().to_string_lossy().to_string();
         let mut problems = Vec::new();
         if got.status != exp["status"].as_str().unwrap() {

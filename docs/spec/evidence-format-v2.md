@@ -33,6 +33,27 @@ Section 8 lists what verification can and cannot prove.
 - **Timestamps**: UTC, `YYYY-MM-DDTHH:MM:SSZ`.
 - A ledger is a UTF-8 text file, one canonical JSON object per line, `\n` line endings.
 
+### Reading files (what a verifier MUST accept and reject)
+
+Two verifiers that disagree about an odd input give an attacker the input the weaker
+one accepts, so reading is specified exactly. A verifier MUST:
+
+- reject a file that is not valid UTF-8 (`TAMPERED_LEDGER`, no `bad_seq`);
+- split lines on `\n` only, ignore one trailing `\r` per line, and skip a line made only
+  of spaces, tabs and `\r`. Any other character (U+2028, U+0085, form feed, ...) is
+  content, not a line break or blank;
+- parse each remaining line as one JSON object (RFC 8259), a later duplicate key
+  replacing an earlier one, and reject: `NaN`/`Infinity`, any number with a fraction or
+  exponent, `-0`, any integer outside -2^63..2^63-1, a lone surrogate (in a string or a
+  key), a byte-order mark, and nesting deeper than 64 levels (the record object is level 1).
+  A rejected line is `TAMPERED_LEDGER` with `bad_seq` = the number of records read before it;
+- treat hex fields (`hash`, `sig`, ...) as lowercase ASCII only: a signature with a space,
+  a capital letter, a prefix, or the wrong length is invalid, never "close enough";
+- treat `true`/`false` as not integers (Python's `True == 1` must not leak into a comparison).
+
+A timestamp is valid only as `YYYY-MM-DDTHH:MM:SSZ` with ASCII digits, a real calendar date
+(leap years included), hour <= 23, minute and second <= 59, and year 1970-9999.
+
 ## 3. Records
 
 Every record has:
@@ -119,8 +140,9 @@ status; the optional inputs decide which checks run.
 
 | # | check | failure status |
 |---|---|---|
-| 1 | every line is a JSON object with no floats; `seq` is 0,1,2,...; `prev_hash` links; `hash` recomputes | `TAMPERED_LEDGER` (+`bad_seq`) |
-| 2 | **if trusted public keys were given:** every record has `key_id` and `sig`; the key is trusted; the signature verifies | `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `BAD_SIGNATURE` (+`bad_seq`) |
+| 1 | the file reads under the rules in section 2; `seq` is the integer 0,1,2,...; `prev_hash` links; `hash` recomputes | `TAMPERED_LEDGER` (+`bad_seq`) |
+| 2 | **if trusted public keys were given:** every record has a non-empty string `key_id` and `sig`; the key is trusted; the signature verifies | `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `BAD_SIGNATURE` (+`bad_seq`) |
+| 2b | after a record's hash (and signature, if keys were given) hold: `ts` is a valid timestamp; `kind`, if present, is a string; a `heartbeat` has `tools` (list of strings) and integer `calls_attempted` / `calls_recorded` | `MALFORMED_RECORD` (+`bad_seq`) |
 | 3 | **if an anchors file was given:** each line is well formed and its `anchor_hash` recomputes; `prev_anchor` links; with keys given, version-2 lines are signed by a trusted key and version-1 lines are refused; the ledger has a record at each anchored `seq` whose `hash` equals `head_hash` | `TAMPERED_ANCHOR`, `UNSIGNED_ANCHOR`, `UNKNOWN_KEY`, `BAD_SIGNATURE`, `TRUNCATED`, `REWRITTEN` |
 | 4 | **if a witness copy was given:** the same per-line and ledger checks as 3 (without `prev_anchor` linking) | same |
 | 5 | **if a maximum gap was given:** the ledger has at least one heartbeat (`NO_HEARTBEAT`); no heartbeat reports `calls_attempted != calls_recorded` (`UNRECORDED_CALLS`); no interval between the first record, each heartbeat, and the last record exceeds the gap (`HEARTBEAT_GAP`) | as named |
@@ -184,7 +206,15 @@ A signed message proves who sent it. It does not make its content safe.
 
 ## 10. Conformance
 
-[`vectors/`](vectors/) holds ten cases (ledgers, keys, witness copies,
+[`vectors/`](vectors/) holds thirteen cases (ledgers, keys, witness copies,
 `expected.json`) covering a valid ledger, edits with and without recomputed
-hashes, truncation, a rebuilt ledger under another key, a heartbeat gap and
-unrecorded calls. `vectors/generate.py` regenerates them byte-for-byte.
+hashes, truncation, a rebuilt ledger under another key, a heartbeat gap, unrecorded
+calls, a nonsense timestamp, a float, and a non-UTF-8 file. `vectors/generate.py`
+regenerates them byte-for-byte.
+
+Vectors prove the common cases. For the rest, the reference implementations are also
+held to each other by property-based tests: random ledgers must verify in both; any
+field edit or raw byte corruption must be rejected, and with the same status, by both;
+re-hashing after an edit must still fail the signature check; and garbage input must
+produce a status, never a crash (`tests/test_fuzz.py`, `tests/test_reader_agreement.py`,
+`verifier/tests/robust.rs`). A third implementation should be run against the same suites.

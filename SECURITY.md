@@ -18,7 +18,7 @@ copy out of the operator's reach* -- and it tells you plainly what it did not ch
 | Ed25519-signed records (`keys.py`, `recorder.py`) | evidence integrity | A rewrite also needs the recorder's private key. **Holds only if the agent and the operator cannot read that key** (see "Key custody"). Verified with `verify --pubkey`; without a key the verifier says signatures were not checked. |
 | Anchors + witness (`anchor.py`) | evidence integrity | Records up to the last anchor were not removed or rewritten, **if a copy of the anchor lives somewhere the operator cannot alter** (public git repo, timestamping service, customer storage). A verifier holding only the witness copy needs nothing from the operator. |
 | Heartbeats (`Guard.heartbeat`, recorder) | completeness (partial) | Shows silent periods, tool-list and policy changes over time, and any call a writer intercepted but failed to record. It covers **only wrapped tools**. |
-| Independent verifier (`verifier/`, Rust) | -- | A separate implementation, checked against the same conformance vectors, so the format does not depend on our Python. |
+| Independent verifier (`verifier/`, Rust) | -- | A separate implementation, checked against the same conformance vectors and fuzzed against the Python one, so the format does not depend on our Python. Both read files by the same strict rules (spec section 2). The same author wrote both, so this is a consistency check, not yet independent review. |
 | Lethal-trifecta policy engine (`policy.py`) | ASI02, ASI03 | Blocks a tool call *before it runs* if it would complete data-access + untrusted-input + external-comm within one **workflow**: sessions that share a `trace_id`, or agents linked by a signed message that carries the sender's categories. |
 | Per-agent Ed25519 messages, receipts, `reconcile` | ASI07 | A message is attributable to one agent (not "anyone with the shared secret"), is bound to its recipient, and both sides' ledgers can be cross-checked for a message only one side recorded. |
 | Process-isolated tools (`isolate=True`) | partial ASI05 | Runs a call in a subprocess with an **allow-listed** environment and a timeout. Reduces accidents and ambient-secret leakage. |
@@ -70,7 +70,7 @@ v0.1 said `verify()` "does not trust the process that produced the file". That w
 wrong: a plain hash chain can be recomputed by anyone who can write the file
 (demonstrated by `tests/test_signed_evidence.py::test_rewrite_and_rehash_passes_without_keys_but_fails_with_signatures`).
 v0.2 fixes that with signatures and anchors and states the remaining conditions above.
-It also fixes: the deny-list environment filter (now allow-list), a printing tool
+Fuzzing the two verifiers against each other then found, and v0.2 fixes, readers that disagreed on odd input: a Python crash on non-UTF-8 files; signatures that could be altered with whitespace or capitals and still verify (`bytes.fromhex` is lenient); `true` accepted as the integer 1; `NaN`, `-0` and huge integers accepted by one reader; Unicode line breaks splitting records differently; lone surrogates crashing one reader. It also fixes: the deny-list environment filter (now allow-list), a printing tool
 corrupting isolated results, raw error text reaching the ledger, concurrent
 writers corrupting the chain, and heartbeat-less silent gaps.
 
