@@ -199,7 +199,7 @@ def test_rejected_messages_are_recorded_as_evidence(world):
 def test_recorder_holds_the_key_and_agent_side_can_only_append(tmp_path):
     rec_key = Signer.generate()
     ledger = Ledger(tmp_path / "l.jsonl", signer=rec_key)
-    svc = RecorderService(ledger, heartbeat_s=0, policy_version="p", policy_hash="h").start()
+    svc = RecorderService(ledger, heartbeat_s=0, policy_version="p", policy_hash="a" * 64).start()
     try:
         remote = RemoteLedger(port=svc.address[1])
         guard = Guard(PolicyEngine(POLICY), remote)

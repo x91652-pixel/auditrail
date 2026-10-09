@@ -62,7 +62,7 @@ def build_fixture(directory: Path):
                          calls_attempted=0, calls_recorded=0, interval_s=60)
     for i in range(4):
         clock.t += 10
-        led.record(agent_id="ag", session_id="s", policy_version="p", tool=["a", "b"][i % 2], categories=["data_access"],
+        led.record(agent_id="ag", session_id="s", policy_version="p", policy_hash="f" * 64, tool=["a", "b"][i % 2], categories=["data_access"],
                    args={"i": i}, decision="deny" if i == 2 else "allow", reason="x" if i == 2 else None, result={"i": i})
     led.record_event("a2a_send", agent_id="ag", peer="other", msg_id="m", msg_digest="0" * 64, categories=[])
     clock.t += 10
@@ -206,7 +206,8 @@ def test_rehashing_after_an_edit_never_gets_past_the_signatures(m):
     # the same edit is invisible without keys (the documented v0.1 limit), except that a broken
     # sequence number is structural and is caught either way
     if key != "seq":
-        assert verify_all(path)["status"] in ("OK", "MALFORMED_RECORD")  # the latter: a field the format constrains
+        # MALFORMED_RECORD: a field the format constrains; LEGACY_FORMAT: the first record lost its `format`
+        assert verify_all(path)["status"] in ("OK", "MALFORMED_RECORD", "LEGACY_FORMAT")
 
 
 # ------------------------------------------------------------------ raw byte mutation

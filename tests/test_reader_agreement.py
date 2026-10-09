@@ -43,7 +43,7 @@ def base(tmp_path_factory):
                          calls_attempted=0, calls_recorded=0, interval_s=60)
     for i in range(3):
         clock.t += 10
-        led.record(agent_id="ag", session_id="s", policy_version="p", tool="a", categories=[], args={"i": i},
+        led.record(agent_id="ag", session_id="s", policy_version="p", policy_hash="f" * 64, tool="a", categories=[], args={"i": i},
                    decision="allow", result={"i": i}, duration_ms=None)
     clock.t += 10
     led.record_heartbeat(recorder_id="r", tools=["a"], policy_version="p", policy_hash="e" * 64,
@@ -119,7 +119,8 @@ def test_unicode_whitespace_is_not_blank_and_not_a_separator(base, tmp_path):
     # U+2028 / U+0085 / form feed: Python's str.strip()/splitlines() would treat these as whitespace or newlines
     for name, ch in (("ls", " "), ("nel", "\u0085"), ("ff", "\x0c"), ("fs", "\x1c")):
         data = (ch + "\n").encode("utf-8") + raw(base)
-        check(base, tmp_path, f"ws_{name}", data, "TAMPERED_LEDGER")
+        # not blank (a blank line would be skipped and give OK); as the first line it has no `"format":`
+        check(base, tmp_path, f"ws_{name}", data, "LEGACY_FORMAT")
     lines = raw(base).split(b"\n")
     inside = lines[1].replace(b'"agent_id":"ag"', '"agent_id":"a g"'.encode("utf-8"))
     check(base, tmp_path, "ls_in_string", b"\n".join([lines[0], inside] + lines[2:]), "TAMPERED_LEDGER")

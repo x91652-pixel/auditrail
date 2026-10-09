@@ -28,10 +28,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if not Path(args.ledger_path).is_file():
         print(f"[ERROR] {args.ledger_path}: file not found (nothing to verify)")
         return 2
-    result = verify_all(
-        args.ledger_path, public_keys=_keys(args), anchors_path=args.anchors, sinks=_sinks(args.git_repo),
-        witness_path=args.witness_file, max_gap_s=args.max_gap,
-    )
+    if args.legacy_v01:
+        from .verifier import verify_legacy_v01
+
+        result = verify_legacy_v01(args.ledger_path)
+    else:
+        result = verify_all(
+            args.ledger_path, public_keys=_keys(args), anchors_path=args.anchors, sinks=_sinks(args.git_repo),
+            witness_path=args.witness_file, max_gap_s=args.max_gap,
+        )
     code = 0 if result["status"] == "OK" else 1
     if args.json:
         result.setdefault("anchored_upto", None)
@@ -40,9 +45,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return code
     if result["status"] == "OK":
         print(f"[OK] {args.ledger_path}: {result['records']} records, hash chain intact.")
-        if result["signatures_checked"]:
+        if result.get("signatures_checked"):
             print("  all records signed by a trusted key")
-        if result["anchored_upto"] is not None:
+        if result.get("anchored_upto") is not None:
             print(f"  anchored up to seq={result['anchored_upto']} ({result['unanchored_tail']} record(s) after it not covered)")
         for ch in result.get("changes", []):
             policy = f" policy changed to {ch['policy_version']}" if ch["policy_changed"] else ""
@@ -179,6 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--witness-file", help="A copy of the anchor lines a witness holds; checked against the ledger "
                           "without trusting the owner's anchors file.")
     p_verify.add_argument("--max-gap", type=int, help="Fail if any period longer than this many seconds has no heartbeat.")
+    p_verify.add_argument("--legacy-v01", action="store_true",
+                          help="Check a v0.1 ledger (no `format` field): hash chain only, unsigned. Python only.")
     p_verify.add_argument("--json", action="store_true", help="Print the verification result as JSON.")
     p_verify.set_defaults(func=cmd_verify)
 
