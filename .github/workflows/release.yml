@@ -1,0 +1,108 @@
+name: release-verifier
+
+# Builds the standalone verifier for each platform from the locked dependencies.
+#   - push a tag like v0.2.0      -> builds, then publishes a GitHub Release with the binaries,
+#                                    a SHA256SUMS file, and build provenance attestations
+#   - run it by hand (Actions tab) -> builds and uploads the binaries as workflow artifacts only;
+#                                    nothing is published
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # native: the runner can execute the binary, so it is tested and smoke-tested.
+          # The Intel macOS build is cross-compiled on the Apple-silicon runner and is NOT run in CI.
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  name: linux-x86_64,   exe: auditrail-verify,     native: true,  flags: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    name: windows-x86_64, exe: auditrail-verify.exe, native: true,  flags: "-C link-arg=/Brepro" }
+          - { os: macos-latest,   target: aarch64-apple-darwin,      name: macos-arm64,    exe: auditrail-verify,     native: true,  flags: "" }
+          - { os: macos-latest,   target: x86_64-apple-darwin,       name: macos-x86_64,   exe: auditrail-verify,     native: false, flags: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # Strip build-machine paths (and, on Windows, the link timestamp) so the same source gives the same bytes.
+      # Set here rather than in the matrix because the workspace path is only known on the runner.
+      - name: Deterministic build flags
+        shell: bash
+        run: echo "RUSTFLAGS=${{ matrix.flags }} --remap-path-prefix=$GITHUB_WORKSPACE=." >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # The binary is only worth shipping if it agrees with the Python implementation on every conformance vector.
+      - name: Test against the conformance vectors and fuzz inputs
+        if: matrix.native
+        working-directory: verifier
+        run: cargo test --locked --release --target ${{ matrix.target }}
+      - name: Build
+        working-directory: verifier
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Smoke test the built binary on a vector
+        if: matrix.native
+        shell: bash
+        run: |
+          BIN="verifier/target/${{ matrix.target }}/release/${{ matrix.exe }}"
+          "$BIN" --version
+          V=docs/spec/vectors/01-valid-signed-witnessed
+          "$BIN" "$V/ledger.jsonl" --pubkey "$V/recorder.pub" --witness "$V/witness.jsonl" --max-gap 60
+          # and it must refuse a tampered one
+          T=docs/spec/vectors/04-rewritten-and-rehashed
+          if "$BIN" "$T/ledger.jsonl" --pubkey "$T/recorder.pub"; then echo "tampered ledger was accepted"; exit 1; fi
+      - name: Rebuild and compare (informational)
+        if: matrix.native
+        continue-on-error: true
+        shell: bash
+        working-directory: verifier
+        run: |
+          BIN="target/${{ matrix.target }}/release/${{ matrix.exe }}"
+          first=$(sha256sum "$BIN" | cut -d' ' -f1)
+          cargo clean --release --target ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }}
+          second=$(sha256sum "$BIN" | cut -d' ' -f1)
+          echo "first : $first"; echo "second: $second"
+          [ "$first" = "$second" ] && echo "two clean builds on this runner are byte-identical" || { echo "::warning::two clean builds differ"; exit 1; }
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "verifier/target/${{ matrix.target }}/release/${{ matrix.exe }}" "dist/auditrail-verify-${{ matrix.name }}${{ endsWith(matrix.exe, '.exe') && '.exe' || '' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auditrail-verify-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the release
+      id-token: write       # build provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum auditrail-verify-* > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/auditrail-verify-*
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "auditrail ${{ github.ref_name }}" \
+            --notes "Standalone offline verifier for auditrail evidence ledgers (format v2). Check the download against SHA256SUMS, or with: gh attestation verify <file> --repo ${{ github.repository }}. See SECURITY.md for what a passing result does and does not prove."

@@ -113,6 +113,29 @@ auditrail-verify evidence.jsonl --pubkey keys/recorder.pub --witness witness-cop
 The verifier prints `OK` only with a list of what it did **not** check (no key
 given, no witness, no heartbeat limit, records after the last anchor).
 
+### Getting the verifier without Python or Rust
+
+`auditrail-verify` is a single static file. Pushing a tag `v*` runs
+[`release.yml`](.github/workflows/release.yml), which builds it for Linux x86_64, Windows x86_64 and macOS
+(Apple silicon and Intel), runs the conformance vectors against each native build, and publishes the files with a
+`SHA256SUMS` list and GitHub build-provenance attestations.
+
+> **No release has been published yet.** Until one is, build it yourself: `cd verifier && cargo build --locked --release`.
+
+```bash
+gh release download v0.2.0 --repo x91652-pixel/auditrail --pattern 'auditrail-verify-linux-x86_64' --pattern SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify auditrail-verify-linux-x86_64 --repo x91652-pixel/auditrail   # which workflow built it
+chmod +x auditrail-verify-linux-x86_64 && ./auditrail-verify-linux-x86_64 --version
+```
+
+What this does and does not give you: the checksum and attestation say the file is the one this repository's
+workflow built from a given commit. They do not say the repository itself is trustworthy, and a verifier you
+downloaded from the same place as the evidence is only as independent as that place. For a high-stakes check,
+build it from source at a commit you reviewed. Builds use `Cargo.lock` and fixed path/timestamp flags; two clean
+builds on one machine were byte-identical, but identical bytes across different machines are not verified. The
+Intel macOS binary is cross-compiled and is not executed in CI.
+
 ## Anchoring (protocol v1)
 
 `verify` only proves the ledger is internally consistent: someone who rewrites
