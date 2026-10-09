@@ -25,3 +25,4 @@ examples/demo_witness/
 *.lock
 target/
 .hypothesis/
+!Cargo.lock
