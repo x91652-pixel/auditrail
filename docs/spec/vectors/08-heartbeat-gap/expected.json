@@ -1,0 +1,7 @@
+{
+  "args": {
+    "max_gap_s": 120,
+    "require_signatures": true
+  },
+  "status": "HEARTBEAT_GAP"
+}

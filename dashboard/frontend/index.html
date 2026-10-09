@@ -8,7 +8,7 @@
   :root { --navy:#1F3A5F; --ink:#1C1C1A; --muted:#6B7280; --line:#E4E0D6; --bg:#F6F4EF; --ok:#2F6B3A; --bad:#B23A2E; --warn:#8A5A10; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
-  header { background:var(--navy); color:#F6F4EF; padding:18px 28px; }
+  header { background:var(--navy); color:#F6F4EF; padding:18px 28px; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:10px; }
   header h1 { margin:0; font-size:20px; font-weight:600; }
   header p { margin:4px 0 0; font-size:13px; opacity:.8; }
   nav { display:flex; gap:4px; padding:12px 28px 0; border-bottom:1px solid var(--line); background:#fff; }
@@ -42,6 +42,7 @@
 <header>
   <h1>auditrail 儀表板</h1>
   <p>AI 代理的防篡改證據日誌、完整性驗證與政策檢視</p>
+  <a href="/anchoring" style="color:#F6F4EF;font-size:13px;opacity:.9">錨定 →</a>
 </header>
 <nav>
   <button data-tab="ledger" class="active">證據日誌</button>

@@ -11,9 +11,17 @@ examples/demo_ledger.jsonl
 examples/live_ledger.jsonl
 *.jsonl
 !tests/**/*.jsonl
+!docs/spec/vectors/**/*.jsonl
 
 .env
 .DS_Store
 
 # Rust build output
 dashboard/target/
+
+# Local anchoring witness used by the dashboard demo (a git repo, never pushed)
+examples/demo_witness/
+
+*.lock
+target/
+.hypothesis/

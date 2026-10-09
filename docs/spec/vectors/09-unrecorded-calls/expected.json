@@ -1,0 +1,8 @@
+{
+  "args": {
+    "max_gap_s": 3600,
+    "require_signatures": true
+  },
+  "bad_seq": 0,
+  "status": "UNRECORDED_CALLS"
+}

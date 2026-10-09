@@ -103,3 +103,30 @@ def test_each_run_starts_from_clean_state(tmp_path):
     second = run_simulation(tmp_path / "b.jsonl")
     assert [r.actual for r in first["attacks"]] == [r.actual for r in second["attacks"]]
     assert first["outbox_count"] == second["outbox_count"] == 4
+
+
+def test_v02_trifecta_split_across_agents_is_blocked_as_one_workflow(sim):
+    r = next(a for a in sim["attacks"] if a.name.startswith("Trifecta split across two agents"))
+    assert r.actual == "BLOCKED"
+    assert "workflow" in r.detail and "inherited" in r.detail
+    assert sim["outbox_count"] == 4
+
+
+def test_v02_rewrite_with_recomputed_hashes_is_caught_by_the_recorder_signature(sim):
+    r = next(a for a in sim["attacks"] if a.name.startswith("Evidence tampering: deny rewritten AND every hash"))
+    assert r.actual == "DETECTED"
+    assert "chain alone passes=True" in r.detail and "BAD_SIGNATURE" in r.detail
+
+
+def test_v02_truncation_after_a_witnessed_anchor_is_caught(sim):
+    r = next(a for a in sim["attacks"] if a.name.startswith("Evidence tampering: tail deleted after a witnessed anchor"))
+    assert r.actual == "DETECTED" and "TRUNCATED" in r.detail
+
+
+def test_v02_simulation_ledger_verifies_with_signatures_anchors_and_witness(sim):
+    from auditrail.anchor import FileSink
+    from auditrail.verifier import verify_all
+
+    res = verify_all(sim["ledger_path"], public_keys=sim["public_keys"], anchors_path=sim["anchors_path"],
+                     sinks={"file": FileSink(sim["witness_path"])}, witness_path=sim["witness_path"])
+    assert res["status"] == "OK" and res["unanchored_tail"] == 0

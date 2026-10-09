@@ -71,3 +71,37 @@ in the market) comes out of a longer research report: incidents,
 regulation, and a landscape/gap analysis of AI security and audit
 tooling. Ask the maintainer for a copy if you want the full citations
 behind the design choices above.
+
+## v0.2: where the trust lives
+
+```
+ agent process                          recorder process (own OS user/host)        outside the operator's control
+┌──────────────────────┐   append only  ┌───────────────────────────────┐          ┌───────────────────────┐
+│ Guard + PolicyEngine │ ─────────────▶ │ Ledger (hash chain + Ed25519) │ anchors  │ witness: git repo,    │
+│  - allow / deny      │  digests only  │ heartbeats every N s          │ ───────▶ │ timestamp service,    │
+│  - workflow trifecta │  (no raw args) │ signs anchors                 │ (hashes) │ customer storage      │
+│ RemoteLedger         │                │ holds the PRIVATE key         │          └──────────┬────────────┘
+│  (no key, no read)   │                └───────────────────────────────┘                     │
+└──────────────────────┘                                                                      ▼
+        │ signed envelope (+ categories)                                      auditrail-verify (Rust, offline)
+        ▼                                                                     ledger + PUBLIC key + witness copy
+ other agent's Guard ── receipt ──▶ sender's ledger        → OK / TAMPERED_LEDGER / BAD_SIGNATURE /
+ (both sides log; `reconcile` compares)                      TRUNCATED / REWRITTEN / HEARTBEAT_GAP / ...
+```
+
+Three separations carry the design, and each is a place it can fail:
+
+1. **Agent vs. recorder.** The agent only appends digests; it cannot read, edit, or sign. This is
+   worth something only if the recorder runs as a different OS user or host and the key file is not
+   readable by the agent.
+2. **Recorder vs. operator.** Signatures stop a rewrite by someone *without* the key. An operator who
+   holds the key can still rewrite, which is why anchors exist.
+3. **Operator vs. witness.** An anchor held by someone else turns "prove you did not rewrite it" into
+   "show the copy you kept". It is only as independent as the witness.
+
+What the architecture cannot give you is completeness: if a tool is not wrapped, or the agent holds an
+outbound credential the guard does not mediate, nothing is recorded. Heartbeats show which tools *are*
+wrapped and make a stopped recorder visible; closing the rest needs the agent to hold no credentials
+except through the guard (see ROADMAP).
+
+The byte-level format, hashing and signing rules are in [spec/evidence-format-v2.md](spec/evidence-format-v2.md).
