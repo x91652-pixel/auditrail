@@ -37,6 +37,10 @@ def parse_ledger_bytes(data: bytes) -> tuple[list[dict], Optional[dict]]:
     text = _strict.decode(data)
     if text is None:
         return [], _fail("TAMPERED_LEDGER", "ledger file is not valid UTF-8")
+    if _strict.is_legacy_text(text):
+        return [], _fail("LEGACY_FORMAT", "this ledger has no `format` field: it was written by auditrail v0.1, "
+                         "which the v2 verifier does not judge (it may hold floats and cannot be signed). "
+                         "Use --legacy-v01 for a hash-chain-only check.")
     records: list[dict] = []
     for lineno, line in _strict.lines(text):
         try:
@@ -61,6 +65,8 @@ def _check_fields(rec: dict, seq: int) -> Optional[dict]:
     kind = rec.get("kind", "call")
     if not isinstance(kind, str):
         return bad("kind is not a string")
+    if "policy_hash" in rec and rec["policy_hash"] is not None and not _strict.is_hex(rec["policy_hash"], 64):
+        return bad("policy_hash is not 64 lowercase hex characters (or null)")
     if kind == "heartbeat":
         tools = rec.get("tools")
         if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
@@ -104,6 +110,38 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
             return problem
         prev = stored
     return None
+
+
+def verify_legacy_v01(path) -> dict:
+    """Hash-chain check of a v0.1 ledger, under the v0.1 rules (floats allowed, no signatures).
+
+    This is all v0.1 ever promised, and it is weaker than it sounds: without a key, anyone who can
+    write the file can rewrite it and recompute the chain. The report says so."""
+    import json
+
+    path = Path(path)
+    text = _strict.decode(path.read_bytes())
+    if text is None:
+        return _fail("TAMPERED_LEDGER", "ledger file is not valid UTF-8")
+    records: list[dict] = []
+    for lineno, line in _strict.lines(text):
+        try:
+            rec = json.loads(line, parse_constant=lambda t: (_ for _ in ()).throw(ValueError(t)))
+            if not isinstance(rec, dict):
+                raise ValueError("not an object")
+            rec["hash"].encode("ascii")
+        except (ValueError, KeyError, AttributeError, RecursionError):
+            return _fail("TAMPERED_LEDGER", f"record #{len(records)} (line {lineno}) is not a v0.1 record", bad_seq=len(records))
+        records.append(rec)
+    prev = GENESIS_HASH
+    for i, rec in enumerate(records):
+        if rec.get("seq") != i or rec.get("prev_hash") != prev or record_hash(prev, rec) != rec.get("hash"):
+            return _fail("TAMPERED_LEDGER", f"seq={i}: hash chain breaks here", bad_seq=i)
+        prev = rec["hash"]
+    return {"status": "OK", "detail": f"{len(records)} record(s), legacy v0.1 hash chain intact", "records": len(records),
+            "legacy": True, "anchored_upto": None, "unanchored_tail": len(records),
+            "notes": ["legacy v0.1 ledger: unsigned, so anyone who could write the file could have rewritten the chain",
+                      "no anchors, witness or heartbeats exist for v0.1 ledgers"]}
 
 
 def _fmt(epoch: int) -> str:
@@ -170,7 +208,19 @@ def verify_all(
     for r in records:
         k = r.get("kind", "call")
         kinds[k] = kinds.get(k, 0) + 1
-    base = {"records": len(records), "kinds": kinds, "signatures_checked": public_keys is not None}
+    # which policy was in force when: consecutive runs of the same full hash across call records
+    policy_hashes: list[dict] = []
+    for r in records:
+        h = r.get("policy_hash")
+        if r.get("kind", "call") != "call" or h is None:
+            continue
+        if policy_hashes and policy_hashes[-1]["policy_hash"] == h:
+            policy_hashes[-1]["last_seq"] = r["seq"]
+        else:
+            policy_hashes.append({"policy_hash": h, "policy_version": r.get("policy_version"),
+                                  "first_seq": r["seq"], "last_seq": r["seq"]})
+    base = {"records": len(records), "kinds": kinds, "signatures_checked": public_keys is not None,
+            "policy_hashes": policy_hashes}
 
     anchored_upto = None
     if anchors_path is not None:
@@ -199,6 +249,8 @@ def verify_all(
         notes.append("no anchors or witness given: truncation and whole-chain rewrites are not detectable")
     elif tail:
         notes.append(f"{tail} record(s) after the last anchor are not covered by any anchor")
+    if len(policy_hashes) > 1:
+        notes.append(f"policy changed {len(policy_hashes) - 1} time(s) across call records (see policy_hashes)")
     if max_gap_s is None:
         notes.append("heartbeats NOT checked (no max gap given): silent periods are not detectable")
     detail = f"{len(records)} record(s), chain intact" + (", all signatures valid" if public_keys is not None else "")

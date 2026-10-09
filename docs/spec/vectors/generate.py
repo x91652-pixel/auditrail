@@ -47,7 +47,8 @@ def build(case_dir: Path, signer: Signer, clock: Clock, n_calls: int = 5):
                          policy_hash="ab" * 32, calls_attempted=0, calls_recorded=0, interval_s=60)
     for i in range(n_calls):
         clock.t += 10
-        led.record(agent_id="agent-1", session_id="sess-1", policy_version="vec-policy", tool="read_x" if i % 2 == 0 else "send_y",
+        led.record(agent_id="agent-1", session_id="sess-1", policy_version="vec-policy", policy_hash="ab" * 32,
+                   tool="read_x" if i % 2 == 0 else "send_y",
                    categories=["data_access"] if i % 2 == 0 else ["external_comm"], args={"i": i, "名稱": "測試"},
                    decision="deny" if i == 3 else "allow", reason="lethal_trifecta" if i == 3 else None,
                    result={"ok": i} if i != 3 else None, duration_ms=1.5)
@@ -163,6 +164,19 @@ def main() -> None:
     build(d, signer, Clock())
     rewrite(d / "ledger.jsonl", lambda r: r[2].update(ts="2026-02-30T00:00:00Z"), rehash=True)
     write_expected(d, {"status": "MALFORMED_RECORD", "bad_seq": 2}, {})
+
+    # 14. hashed and signed correctly, but policy_hash is not a hash
+    d = OUT / "14-malformed-policy-hash"
+    build(d, signer, Clock())
+    rewrite(d / "ledger.jsonl", lambda r: r[2].update(policy_hash="policy-v1"), rehash=True)
+    write_expected(d, {"status": "MALFORMED_RECORD", "bad_seq": 2}, {})
+
+    # 15. a genuine v0.1 ledger (written by the real v0.1 code; holds floats, has no `format`): not judged, not an alarm
+    d = OUT / "15-legacy-v01"
+    d.mkdir(parents=True)
+    legacy = (ROOT / "tests" / "fixtures" / "legacy_v01_ledger.jsonl").read_bytes()
+    (d / "ledger.jsonl").write_bytes(legacy)
+    write_expected(d, {"status": "LEGACY_FORMAT"}, {})
 
     # 12. a float where only integers are allowed: rejected while parsing, before any hash is looked at
     d = OUT / "12-float-in-record"

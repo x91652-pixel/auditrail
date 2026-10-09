@@ -84,6 +84,17 @@ def lines(text: str) -> list[tuple[int, str]]:
     return out
 
 
+def is_legacy_text(text: str) -> bool:
+    """True when the first non-blank line has no `"format":` member, i.e. a v0.1 ledger (spec section 2).
+
+    A plain substring test on purpose: it needs no JSON parsing, so every implementation gives the same
+    answer on every input, including input the strict parser would reject. A v2 record that lost its
+    format field also lands here, which is still a non-OK result."""
+    for _, line in lines(text):
+        return '"format":' not in line
+    return False
+
+
 def parse_ts(ts: Any) -> Optional[int]:
     """Epoch seconds for a valid timestamp string, else None."""
     if not isinstance(ts, str) or _TS.fullmatch(ts) is None:
