@@ -64,6 +64,32 @@ POLICY = {
 }
 
 
+def _strict_policy() -> dict:
+    """The same company with the phase-1 options on.
+
+    Every tool gets a label (write actions are `state_change`, pure helpers are
+    `internal`), unlabelled tools are refused, and a state change is refused once a
+    workflow has read untrusted input.
+    """
+    import copy
+
+    cfg = copy.deepcopy(POLICY)
+    cfg["version"] = "logistics-policy-strict-v1-2026Q4"
+    cfg["strict_classification"] = True
+    relabel = {"reroute_shipment": ["state_change"], "issue_refund": ["state_change"],
+               "update_inventory": ["state_change"], "scan_pallet": ["internal"],
+               "probe_carrier_api_key": ["internal"], "slow_sync_job": ["internal"]}
+    for agent in cfg["agents"].values():
+        agent["enforce_state_change_after_untrusted"] = True
+        for tool_name, cats in relabel.items():
+            if tool_name in agent["tool_categories"]:
+                agent["tool_categories"][tool_name] = cats
+    return cfg
+
+
+STRICT_POLICY = _strict_policy()
+
+
 def build(guard, bridge_secret: str, replay_guard: ReplayGuard):
     """Return the company's tools, each wrapped by the given Guard.
 

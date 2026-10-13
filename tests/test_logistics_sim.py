@@ -130,3 +130,37 @@ def test_v02_simulation_ledger_verifies_with_signatures_anchors_and_witness(sim)
     res = verify_all(sim["ledger_path"], public_keys=sim["public_keys"], anchors_path=sim["anchors_path"],
                      sinks={"file": FileSink(sim["witness_path"])}, witness_path=sim["witness_path"])
     assert res["status"] == "OK" and res["unanchored_tail"] == 0
+
+
+# ---------------------------------------------------------------- phase 1: strict policy
+
+def test_phase1_strict_policy_blocks_the_reroute_the_default_policy_allows(sim):
+    default = next(a for a in sim["attacks"] if a.name.startswith("Malicious carrier payload → shipment rerouted"))
+    strict = next(a for a in sim["attacks"] if a.name.startswith("Same reroute as above, strict policy"))
+    assert default.actual == "ALLOWED"  # the default policy still has this gap
+    assert strict.actual == "BLOCKED" and "state_change_after_untrusted" in strict.detail
+    assert "TPE-HUB-B -> TPE-HUB-B" in strict.detail  # the hub really did not change
+
+
+def test_phase1_unlabelled_tool_runs_in_default_mode_and_is_refused_in_strict_mode(sim):
+    r = next(a for a in sim["attacks"] if a.name.startswith("A newly added tool nobody labelled"))
+    assert "default mode: ALLOWED" in r.detail
+    assert r.actual == "BLOCKED" and "unclassified_tool" in r.detail
+
+
+def test_phase1_a_wrong_label_is_still_not_caught(sim):
+    r = next(a for a in sim["attacks"] if a.name.startswith("A state-changing tool labelled 'internal'"))
+    assert r.actual == "ALLOWED" and r.known_gap
+
+
+def test_phase1_refusals_are_recorded_with_their_reason(sim):
+    from auditrail import Ledger
+
+    reasons = [rec.get("reason") or "" for rec in Ledger(sim["ledger_path"]) if rec.get("decision") == "deny"]
+    assert any(r.startswith("unclassified_tool") for r in reasons)
+    assert any(r.startswith("state_change_after_untrusted") for r in reasons)
+
+
+def test_phase1_default_mode_lists_the_tools_strict_mode_would_refuse(sim):
+    assert "reroute_shipment" in sim["unclassified_in_default_mode"]
+    assert "issue_refund" in sim["unclassified_in_default_mode"]
