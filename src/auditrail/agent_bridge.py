@@ -32,8 +32,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import sqlite3
 import time
 import uuid
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -44,10 +47,23 @@ class SignatureError(ValueError):
     pass
 
 
-class ReplayGuard:
-    """In-memory nonce tracker. For multi-process deployments, back this
-    with a shared store (Redis, a DB table with a unique index) instead --
-    tracked in ROADMAP.md.
+class ReplayStore(ABC):
+    """Where seen message ids are remembered. One method, so a store can be swapped.
+
+    seen_before(nonce) must be atomic: it records the nonce and returns whether it
+    was already present, as a single step. Implementations must fail *closed*: if
+    the store cannot answer, raise rather than return False.
+    """
+
+    @abstractmethod
+    def seen_before(self, nonce: str) -> bool:
+        ...
+
+
+class ReplayGuard(ReplayStore):
+    """In-memory nonce tracker (the default). It is per process: two processes, or a
+    restart, each start with an empty memory. For several processes on one host use
+    SqliteReplayGuard; across hosts you need a store you operate yourself.
 
     Nonces older than ttl_seconds are forgotten, which keeps memory bounded.
     That is safe while ttl_seconds >= the receiver's max message age plus clock
@@ -67,6 +83,58 @@ class ReplayGuard:
             return True
         self._seen[nonce] = now
         return False
+
+
+class SqliteReplayGuard(ReplayStore):
+    """Replay store in a SQLite file, shared by every process on the same host.
+
+    Uses the standard library's sqlite3: its file locking makes the check-and-insert
+    atomic across processes, so of N processes given the same message exactly one
+    sees it as new. Notes:
+
+    * Time is wall-clock (processes cannot share a monotonic clock); ttl_seconds
+      must be at least the freshness window plus clock skew, as for ReplayGuard.
+    * It fails closed: a locked, unwritable or corrupt database raises
+      sqlite3.Error instead of reporting "not seen".
+    * SQLite file locking is unreliable on network filesystems; do not put the file
+      on NFS/SMB. It is also only as private as the file's permissions.
+    """
+
+    def __init__(self, path, ttl_seconds: float = 300.0, clock=time.time, busy_timeout_s: float = 30.0):
+        self.path = os.fspath(path)
+        self.ttl_seconds = ttl_seconds
+        self._clock = clock
+        self._busy = busy_timeout_s
+        with self._connect() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS replay (nonce TEXT PRIMARY KEY, seen_at REAL NOT NULL)")
+            conn.execute("CREATE INDEX IF NOT EXISTS replay_seen_at ON replay (seen_at)")
+        try:
+            os.chmod(self.path, 0o600)  # no effect on Windows, where ACLs apply
+        except OSError:
+            pass
+
+    def _connect(self) -> sqlite3.Connection:
+        # autocommit mode; the transaction below is explicit
+        return sqlite3.connect(self.path, timeout=self._busy, isolation_level=None)
+
+    def seen_before(self, nonce: str) -> bool:
+        now = self._clock()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")  # takes the write lock: check-and-insert is one step
+            conn.execute("DELETE FROM replay WHERE seen_at < ?", (now - self.ttl_seconds,))
+            inserted = conn.execute("INSERT OR IGNORE INTO replay (nonce, seen_at) VALUES (?, ?)",
+                                    (nonce, now)).rowcount == 1
+            conn.execute("COMMIT")
+            return not inserted
+        except BaseException:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
 
 
 # ====================================================================== v1 (legacy HMAC)
@@ -172,7 +240,7 @@ def receive_envelope(
     envelope: dict,
     registry: KeyRegistry,
     recipient: str,
-    replay_guard: ReplayGuard,
+    replay_guard: ReplayStore,
     max_age_seconds: float = 60.0,
 ) -> Delivered:
     """Verify a v2 envelope addressed to `recipient`. Raises SignatureError on any problem."""

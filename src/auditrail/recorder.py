@@ -23,6 +23,7 @@ process memory only -- the agent could still read the key file from disk.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -35,6 +36,36 @@ from typing import Any, Optional
 
 from .keys import Signer
 from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, call_fields
+
+
+def _token_matches(supplied: Any, expected: str) -> bool:
+    """Constant-time token check.
+
+    Both sides are hashed first, so the comparison is over two equal-length byte
+    strings whatever the token's length or characters. (hmac.compare_digest on two
+    str objects raises for non-ASCII text, which would reject a correct token.)
+    A token that is not a string is simply wrong.
+    """
+    if not isinstance(supplied, str):
+        return False
+    a = hashlib.sha256(supplied.encode("utf-8", "surrogatepass")).digest()
+    b = hashlib.sha256(expected.encode("utf-8", "surrogatepass")).digest()
+    return hmac.compare_digest(a, b)
+
+
+def startup_permission_warnings(key_path, ledger_path, anchors_path=None) -> list[str]:
+    """Warnings about files the recorder depends on being open to other local accounts.
+
+    The recorder listens on a loopback TCP port; there is no socket file. The key
+    must be private, the ledger and anchors must not be writable by others.
+    """
+    from ._perms import permission_warnings
+
+    out = [f"signing key {m}" for m in permission_warnings(key_path, "secret")]
+    for label, path in (("ledger", ledger_path), ("anchors", anchors_path)):
+        if path and Path(path).exists():
+            out += [f"{label} {m}" for m in permission_warnings(path, "writable")]
+    return out
 
 
 class RecorderService:
@@ -95,7 +126,7 @@ class RecorderService:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     def _handle(self, req: dict) -> dict:
-        if self.token is not None and not hmac.compare_digest(str(req.get("token", "")), self.token):
+        if self.token is not None and not _token_matches(req.get("token"), self.token):
             return {"ok": False, "error": "bad or missing token"}
         op = req.get("op")
         if op not in ("call", "event"):
@@ -246,6 +277,8 @@ def serve(args) -> int:
     from .anchor import FileSink, GitSink
     from .policy import PolicyEngine
 
+    for msg in startup_permission_warnings(args.key, args.ledger, args.anchors):
+        print(f"[RECORDER][WARN] {msg}", flush=True)
     signer = Signer.from_file(args.key)
     ledger = Ledger(args.ledger, signer=signer)
     policy_version, policy_hash = "", None  # no policy file: heartbeats say "unknown" rather than inventing a hash
@@ -258,6 +291,12 @@ def serve(args) -> int:
     elif args.witness_file:
         sink = FileSink(args.witness_file)
     token = os.environ.get(args.token_env) if args.token_env else None
+    if token == "":
+        print(f"[RECORDER][WARN] {args.token_env} is set but empty; running WITHOUT a token", flush=True)
+        token = None
+    if token is None:
+        print("[RECORDER][WARN] no token: any local process that can reach the port can write to the ledger. "
+              "Set the token environment variable.", flush=True)
     anchor_every = args.anchor_every if args.anchor_every is not None else (300 if args.anchors else 0)
     svc = RecorderService(
         ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,

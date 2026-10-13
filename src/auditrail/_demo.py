@@ -25,7 +25,7 @@ _POLICY = {
     "agents": {
         "hr-screener": {
             "allowed_tools": ["read_resume", "score_candidate", "write_result"],
-            "tool_categories": {"read_resume": ["data_access"], "score_candidate": [], "write_result": ["external_comm"]},
+            "tool_categories": {"read_resume": ["data_access"], "score_candidate": ["internal"], "write_result": ["external_comm"]},
             "enforce_lethal_trifecta": True,
         },
         "support-bot": {
@@ -66,7 +66,7 @@ def run_demo() -> int:
     def read_resume(candidate_id: str) -> dict:
         return {"name": "A. Lin", "years_experience": 6}
 
-    @guard.guarded_tool("score_candidate", categories=[])
+    @guard.guarded_tool("score_candidate", categories=["internal"])
     def score_candidate(resume: dict) -> int:
         return min(100, resume["years_experience"] * 12)
 

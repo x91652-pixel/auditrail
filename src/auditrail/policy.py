@@ -20,6 +20,22 @@ carries its sender's categories along (agent_bridge.Envelope.categories), so
 "agent A reads private data, hands it to B, B reads a web page and emails out"
 is caught even though no single session held all three. A session that is not
 linked to any other (its own trace_id) behaves exactly as in v0.1.
+
+Two options tighten the defaults without changing them for existing policies:
+
+* ``strict`` (``PolicyEngine(config, strict=True)`` or ``strict_classification: true``
+  in the policy): a wrapped tool whose categories are empty -- nothing declared in
+  the policy and nothing at the call site -- is refused and the refusal recorded as
+  ``unclassified_tool``. A tool that really touches none of the risk categories must
+  say so with an explicit label such as ``internal``; an empty list is not a label.
+* ``enforce_state_change_after_untrusted`` (per agent): a tool labelled
+  ``state_change`` -- it changes an external system without necessarily
+  communicating outward (a refund, a reroute) -- is refused once the workflow has
+  touched ``untrusted_input``, unless the tool is listed in
+  ``state_change_allowed_tools``.
+
+Neither can know whether a label is *true*. They make a missing label a refusal and
+give write actions a rule to be subject to; see SECURITY.md for what remains.
 """
 from __future__ import annotations
 
@@ -35,6 +51,12 @@ except ImportError:  # pragma: no cover - yaml is a declared dependency
     yaml = None
 
 TRIFECTA = {"data_access", "untrusted_input", "external_comm"}
+STATE_CHANGE = "state_change"
+UNTRUSTED = "untrusted_input"
+
+
+class UnclassifiedToolWarning(UserWarning):
+    """A tool was wrapped without any category while the policy is not in strict mode."""
 
 
 @dataclass
@@ -60,9 +82,15 @@ class PolicyError(ValueError):
 
 
 class PolicyEngine:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, strict: Optional[bool] = None):
         if "version" not in config:
             raise PolicyError("policy is missing required 'version' field")
+        self._validate_options(config)
+        from_config = bool(config.get("strict_classification", False))
+        #: whether a tool with no declared category is refused (see module docstring)
+        self.strict: bool = from_config if strict is None else bool(strict)
+        if self.strict != from_config:
+            config = {**config, "strict_classification": self.strict}  # so the hash says which mode ran
         self.version: str = config["version"]
         self.agents: dict = config.get("agents", {})
         self.default: dict = config.get(
@@ -75,11 +103,28 @@ class PolicyEngine:
         self._workflows: dict[str, set] = {}
 
     @classmethod
-    def from_yaml(cls, path: str) -> "PolicyEngine":
+    def from_yaml(cls, path: str, strict: Optional[bool] = None) -> "PolicyEngine":
         if yaml is None:
             raise RuntimeError("pyyaml is required to load policy files: pip install pyyaml")
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-        return cls(data)
+        return cls(data, strict=strict)
+
+    @staticmethod
+    def _validate_options(config: dict) -> None:
+        if not isinstance(config.get("strict_classification", False), bool):
+            raise PolicyError("'strict_classification' must be true or false")
+        sections = [config.get("default") or {}, *(config.get("agents") or {}).values()]
+        for cfg in sections:
+            if not isinstance(cfg.get("enforce_state_change_after_untrusted", False), bool):
+                raise PolicyError("'enforce_state_change_after_untrusted' must be true or false")
+            allowed = cfg.get("state_change_allowed_tools", [])
+            if not isinstance(allowed, list) or not all(isinstance(t, str) for t in allowed):
+                raise PolicyError("'state_change_allowed_tools' must be a list of tool names")
+
+    def classified_by_policy(self, tool: str) -> bool:
+        """True if any agent (or the default) gives `tool` at least one category in the policy."""
+        sections = [self.default, *self.agents.values()]
+        return any(cfg.get("tool_categories", {}).get(tool) for cfg in sections)
 
     def _agent_config(self, agent_id: str) -> dict:
         return self.agents.get(agent_id, self.default)
@@ -113,6 +158,15 @@ class PolicyEngine:
         if extra_categories:
             categories |= set(extra_categories)
 
+        if self.strict and not categories:
+            return Decision(
+                allow=False,
+                reason=(
+                    f"unclassified_tool: tool '{tool}' has no category in the policy or at the call site "
+                    "(strict mode refuses it; label it, e.g. 'internal' if it touches none of the risk categories)"
+                ),
+            )
+
         enforce = cfg.get("enforce_lethal_trifecta", True)
         exempt = set(cfg.get("trifecta_exempt_tools", []))
         seen = self.seen(session)
@@ -128,6 +182,19 @@ class PolicyEngine:
                     "lethal_trifecta: session already touched "
                     f"{sorted(already) or '{}'}, tool '{tool}' would add {sorted(adding)}, "
                     f"completing data_access + untrusted_input + external_comm in {scope}"
+                ),
+            )
+        if (
+            cfg.get("enforce_state_change_after_untrusted", False)
+            and STATE_CHANGE in categories
+            and UNTRUSTED in would_see
+            and tool not in set(cfg.get("state_change_allowed_tools", []))
+        ):
+            return Decision(
+                allow=False,
+                reason=(
+                    f"state_change_after_untrusted: tool '{tool}' changes external state and this workflow has "
+                    "touched untrusted_input; list it in state_change_allowed_tools if that is intended"
                 ),
             )
         return Decision(allow=True)
