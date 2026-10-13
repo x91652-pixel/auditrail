@@ -84,6 +84,25 @@ unwrapped tools stayed quiet, protect you if the recorder key is stolen, or cert
 compliance -- is in [SECURITY.md](SECURITY.md). Read that before deciding whether
 it fits your threat model.
 
+## Stricter modes (opt-in; defaults are unchanged)
+
+```python
+policy = PolicyEngine.from_yaml("policies/example_policy.yaml", strict=True)
+guard = Guard(policy, ledger)           # a wrapped tool with no category is refused and recorded as `unclassified_tool`
+replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by every process on this host
+```
+
+- `strict` (or `strict_classification: true` in the policy): a tool with no category is refused. Without it, a warning
+  is printed when such a tool is wrapped. Harmless tools say so with an explicit label such as `internal`.
+- `state_change` is a category for actions that change an external system without necessarily communicating outward.
+  With `enforce_state_change_after_untrusted: true` per agent, such a tool is refused once its workflow has read
+  untrusted input, unless it is listed in `state_change_allowed_tools`.
+- `SqliteReplayGuard` replaces the in-memory `ReplayGuard` when several agent processes on one host receive messages.
+- `auditrail recorder` warns at startup about a key file other accounts can read and a missing token.
+
+These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
+see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
+
 ## Evidence the operator cannot quietly rewrite
 
 ```bash
@@ -257,7 +276,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 253 Python tests are deterministic and require no network access or API key
+All 291 Python tests (one runs only on POSIX, two only on Windows; the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and

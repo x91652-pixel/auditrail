@@ -40,10 +40,10 @@ Be skeptical of any tool (including this one) that does not say this part out lo
 **About the policy and messages**
 
 - **No prompt-injection detection, and none of the content of a message is judged.** A signed message can carry an injection; signatures prove origin, not safety.
-- **The trifecta rule is category-based and the categories are labelled by you.** A wrong label defeats it. A write action with no external-comm label (rerouting a shipment, issuing a refund) is not blocked by it.
+- **The trifecta rule is category-based and the categories are labelled by you.** A wrong label defeats it. A write action with no external-comm label (rerouting a shipment, issuing a refund) is not blocked by it. Two opt-in options reduce this (see "Opt-in hardening" below); they do not remove it, and the defaults are unchanged.
 - **Workflow tracking needs the link.** Two sessions with different `trace_id`s and no signed message between them are still independent (the known gap in the simulation).
 - **Messages need your key registry to be right.** Whoever controls the registry decides which key speaks for which agent. The v1 shared-secret HMAC remains for compatibility and **proves only "someone with the secret"**.
-- **Replay protection is in memory.** `ReplayGuard` is per process and forgets nonces after its TTL (which must be at least the freshness window). Multi-process deployments need a shared store.
+- **Replay protection is in memory by default.** `ReplayGuard` is per process and forgets nonces after its TTL (which must be at least the freshness window). `SqliteReplayGuard` shares the memory between processes **on one host**; it does nothing across hosts, and the SQLite file must not live on a network filesystem. A store you operate yourself is needed for a multi-host deployment.
 
 **About isolation**
 
@@ -55,6 +55,18 @@ Be skeptical of any tool (including this one) that does not say this part out lo
 - **No supply-chain verification (ASI04), no memory/context-poisoning detection (ASI06), no cascading-failure containment (ASI08)** beyond what the above gives.
 - **No steganography detection.** There is no known technique that guarantees it; the ledger is an evidence layer for after-the-fact analysis, not a detector.
 - **Not a certified compliance product.** Nothing here has had an independent audit. Do not represent its output as satisfying NYC Local Law 144, the EU AI Act, ISO/IEC 42001 or any other requirement without your own legal and compliance review.
+
+## Opt-in hardening: what it mitigates and what remains
+
+These are off unless you turn them on, so an existing policy is evaluated exactly as
+before. "Mitigated" means the problem is smaller or louder, not that it is gone.
+
+| Known problem | Option | What it now does | What still remains |
+|---|---|---|---|
+| A tool nobody labelled is invisible to the trifecta rule | `PolicyEngine(..., strict=True)` or `strict_classification: true` | A wrapped tool with no category (policy or call site) is refused before it runs and the refusal is recorded as `unclassified_tool`. An empty list does **not** count as a label; a harmless tool must say `internal`. Without strict mode a warning is emitted when the tool is wrapped. | **A wrong label is still believed.** A state-changing tool labelled `internal` runs (simulation attack 19). The engine cannot know what a function does. `internal` is a convention, not a verified fact. The warning is emitted once at wrap time, and only to whoever reads the output. |
+| A write action with no external channel (refund, reroute) is not stopped | label the tool `state_change`; per agent `enforce_state_change_after_untrusted: true`, optional `state_change_allowed_tools` | A `state_change` tool is refused once its workflow has touched `untrusted_input`, unless explicitly listed. | **Only for tools you labelled `state_change`**, and only after *untrusted input was labelled as such*. A state change with no untrusted input first is allowed. A tool on the allow list is trusted completely. Splitting a workflow without a shared `trace_id` or signed message (simulation attack 11) still defeats it. It is a rule about *order*, not a judgement of whether the action is right: there is no approval step. |
+| Replay protection is per process | `SqliteReplayGuard(path)` | One decision shared by all processes on a host; of N processes given the same message exactly one accepts it. Fails closed if the store cannot answer. | Single host only; SQLite on a network filesystem is unsafe; anyone who can write the file can erase nonces, so its permissions matter. The freshness window still bounds how long a nonce must be remembered. |
+| The recorder is protected only by a shared token | constant-time token check; startup permission warnings | The token is compared as fixed-length digests (a non-ASCII token now also works); non-string tokens are rejected. At startup the recorder warns when the key file is readable by other accounts, or the ledger/anchors are writable by them. | **There is no socket file**: the recorder listens on a loopback TCP port, so *any local process* that knows the token can write, and anything that can read the environment or the agent's memory has the token. The token travels in clear text over loopback. The permission check is advisory (warnings, not refusal), cannot see who the agent runs as, and on Windows reads the ACL via PowerShell and looks only at the broad groups (Everyone, Users, Authenticated Users, Guests, Anonymous); it reports "could not check" if PowerShell is unavailable. Same OS user for agent and recorder defeats all of it. |
 
 ## Key custody (read this before trusting a signature)
 
