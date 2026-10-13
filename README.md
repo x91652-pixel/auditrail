@@ -105,10 +105,15 @@ guard.start_heartbeats()             # the agent's own "still wrapped" signal
 ```
 
 ```bash
-# 3. anyone, offline, with only the PUBLIC key and a witness copy:
+# 3. anyone, offline, with only the PUBLIC key and a witness copy.
+#    auditrail-verify is the standalone Rust binary (build it or download it, see below):
 auditrail-verify evidence.jsonl --pubkey keys/recorder.pub --witness witness-copy.jsonl --max-gap 120
-# (or `auditrail verify ...` with the same flags in Python)
+#    the Python CLI does the same; note the flag is --witness-file there:
+auditrail verify evidence.jsonl --pubkey keys/recorder.pub --witness-file witness-copy.jsonl --max-gap 120
 ```
+
+`pip install` installs only the `auditrail` command. `auditrail-verify` comes from `cd verifier && cargo build --release`
+or from a release download.
 
 The verifier prints `OK` only with a list of what it did **not** check (no key
 given, no witness, no heartbeat limit, records after the last anchor).
@@ -142,7 +147,7 @@ Intel macOS binary is cross-compiled and is not executed in CI.
 the whole ledger, or cuts off its tail, still passes it. Anchoring periodically
 records the chain head (sequence number and hash, no tool arguments or results)
 and publishes it to a witness outside the ledger owner's sole control. The full
-specification is in `auditrail-docs/錨定協定.md`; the signed (v2) form is in [docs/spec/evidence-format-v2.md](docs/spec/evidence-format-v2.md).
+current specification, including the signed (v2) anchors, is [docs/spec/evidence-format-v2.md](docs/spec/evidence-format-v2.md).
 
 ```bash
 # record the current head; with --push, also push the witness commit
@@ -151,8 +156,11 @@ auditrail verify ledger.jsonl --anchors anchors.jsonl --git-repo ../witness
 ```
 
 `verify --anchors` reports one of `OK`, `TAMPERED_LEDGER`, `TAMPERED_ANCHOR`,
-`REWRITTEN`, `TRUNCATED`, `SINK_MISMATCH`, or `SINK_UNREACHABLE`, plus how many
-records after the last anchor are not covered.
+`UNSIGNED_ANCHOR`, `UNKNOWN_KEY`, `BAD_SIGNATURE`, `REWRITTEN`, `TRUNCATED`,
+`SINK_MISMATCH`, or `SINK_UNREACHABLE`, plus how many records after the last anchor
+are not covered. (`SINK_*` exist only in the Python verifier; the Rust one reads a
+witness file and has no sinks. The full status list, including the record- and
+heartbeat-level ones, is in the format spec.)
 
 What anchoring proves: records up to the last anchor were not rewritten, deleted,
 or reordered, provided that anchor has been stored outside the owner's control.
@@ -183,7 +191,8 @@ python -m examples.mock_demo
 auditrail demo
 ```
 
-Verify any ledger's integrity independently:
+Verify any ledger's integrity independently (the demo writes `examples/demo_ledger.jsonl`;
+`*.jsonl` is git-ignored, so the file exists only after you have run the demo):
 
 ```bash
 auditrail verify examples/demo_ledger.jsonl
