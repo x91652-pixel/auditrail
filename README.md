@@ -66,9 +66,10 @@ already use.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up.
-- **Independent verifier.** `verifier/` is a separate Rust program, written from the
+- **Independent implementation of the verifier.** `verifier/` is a separate Rust program, written from the
   [public format spec](docs/spec/evidence-format-v2.md) and tested against the same
-  conformance vectors as the Python code. One offline binary, no network.
+  conformance vectors as the Python code. One offline binary, no network. It was written by the
+  same author as the Python code, so it checks that the two agree, not yet that the format is right.
 - **Lethal-trifecta policy by workflow.** A call that would complete
   data-access + untrusted-input + external-comm is refused *before it runs*, counted
   across a whole workflow (shared `trace_id`, or agents linked by a signed message

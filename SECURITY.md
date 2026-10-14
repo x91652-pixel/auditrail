@@ -1,9 +1,10 @@
 # Security model and scope
 
 auditrail is an early-stage project (v0.2, no independent security review). This
-document exists so nobody -- including us -- overestimates what it does. Every
-claim in the "does" column has a test; every gap we know of is in the "does not"
-section. It maps features to the OWASP Top 10 for Agentic Applications 2026
+document exists so nobody -- including us -- overestimates what it does. Each
+claim in the "does" column is covered by at least one test (named in
+[docs/STATUS.md](docs/STATUS.md)), **except for the cases listed under "Where the
+tests do not reach" below**; every gap we know of is in the "does not" section. It maps features to the OWASP Top 10 for Agentic Applications 2026
 (ASI01-ASI10) and to the "lethal trifecta" framework (Simon Willison).
 
 **The one-sentence version:** auditrail makes a record of what an agent did that
@@ -18,7 +19,7 @@ copy out of the operator's reach* -- and it tells you plainly what it did not ch
 | Ed25519-signed records (`keys.py`, `recorder.py`) | evidence integrity | A rewrite also needs the recorder's private key. **Holds only if the agent and the operator cannot read that key** (see "Key custody"). Verified with `verify --pubkey`; without a key the verifier says signatures were not checked. |
 | Anchors + witness (`anchor.py`) | evidence integrity | Records up to the last anchor were not removed or rewritten, **if a copy of the anchor lives somewhere the operator cannot alter** (public git repo, timestamping service, customer storage). A verifier holding only the witness copy needs nothing from the operator. |
 | Heartbeats (`Guard.heartbeat`, recorder) | completeness (partial) | Shows silent periods, tool-list and policy changes over time, and any call a writer intercepted but failed to record. It covers **only wrapped tools**. |
-| Independent verifier (`verifier/`, Rust) | -- | A separate implementation, checked against the same conformance vectors and fuzzed against the Python one, so the format does not depend on our Python. Both read files by the same strict rules (spec section 2). The same author wrote both, so this is a consistency check, not yet independent review. |
+| Independent *implementation* of the verifier (`verifier/`, Rust; **same author**) | -- | A separate implementation, checked against the same conformance vectors and fuzzed against the Python one, so the format does not depend on our Python. Both read files by the same strict rules (spec section 2). The same author wrote both, so this is a consistency check, not yet independent review. |
 | Lethal-trifecta policy engine (`policy.py`) | ASI02, ASI03 | Blocks a tool call *before it runs* if it would complete data-access + untrusted-input + external-comm within one **workflow**: sessions that share a `trace_id`, or agents linked by a signed message that carries the sender's categories. |
 | Per-agent Ed25519 messages, receipts, `reconcile` | ASI07 | A message is attributable to one agent (not "anyone with the shared secret"), is bound to its recipient, and both sides' ledgers can be cross-checked for a message only one side recorded. |
 | Process-isolated tools (`isolate=True`) | partial ASI05 | Runs a call in a subprocess with an **allow-listed** environment and a timeout. Reduces accidents and ambient-secret leakage. |
@@ -55,6 +56,27 @@ Be skeptical of any tool (including this one) that does not say this part out lo
 - **No supply-chain verification (ASI04), no memory/context-poisoning detection (ASI06), no cascading-failure containment (ASI08)** beyond what the above gives.
 - **No steganography detection.** There is no known technique that guarantees it; the ledger is an evidence layer for after-the-fact analysis, not a detector.
 - **Not a certified compliance product.** Nothing here has had an independent audit. Do not represent its output as satisfying NYC Local Law 144, the EU AI Act, ISO/IEC 42001 or any other requirement without your own legal and compliance review.
+
+## Where the tests do not reach
+
+Stated so that "has a test" is not read as "is verified everywhere":
+
+- **Platforms.** The maintainers' test runs so far were on Windows 11 with Python 3.11. Anything that is
+  POSIX-specific has not been executed by us: the permission check on real files (`chmod` modes), the `fcntl`
+  file-lock path, a recorder shut down with SIGTERM, and `anchor --push` on a system with a stricter git
+  `safe.directory` policy. The pure functions behind them are tested; the end-to-end paths are not.
+- **Constant-time token comparison.** A test shows the comparison goes through `hmac.compare_digest` on equal-length
+  digests. Nothing measures timing.
+- **Key rotation (Key custody, step 5).** "Anchor under both keys for an overlap" is a procedure we describe. There is
+  no test that rotates a key and verifies across the overlap.
+- **Timestamping services as a witness.** The anchors row lists one as an example of an independent copy; no
+  timestamping witness is implemented (RFC 3161 is on the roadmap). Only file and git witnesses exist and are tested.
+- **The release workflow** (`release.yml`) has never run on GitHub, so the prebuilt binaries, checksums and
+  attestations described in the README are unproven. `verify --git-repo` through the CLI has no test of its own.
+- **Tests that need the Rust binary** skip with an explicit reason when it is not built; a green run without it says
+  nothing about Python/Rust agreement.
+- **The Windows ACL check** reads only the broad groups (see the recorder row below); a loose permission it cannot
+  see passes.
 
 ## Opt-in hardening: what it mitigates and what remains
 
