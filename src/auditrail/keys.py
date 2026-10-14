@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
@@ -92,12 +93,34 @@ def verify_sig(public_hex: str, tag: bytes, message: bytes, sig_hex: str) -> boo
         return False
 
 
+# Exactly the characters Rust's str::trim removes (Unicode White_Space). Python's str.strip() also removes
+# U+001C..U+001F, which Rust does not, so it is not used here.
+_RUST_WHITESPACE = "".join(map(chr, (
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F,
+    0x3000)))
+
+
+def parse_public_hex(text: str) -> str:
+    """A public key as 64 lower-case hex digits, from the text of a .pub file.
+
+    The rule is the Rust verifier's: trim surrounding whitespace, then the rest must be exactly 32 bytes of
+    hexadecimal, in either case. Embedded whitespace, a 0x prefix, odd or wrong lengths are errors
+    (bytes.fromhex alone would skip whitespace and check no length)."""
+    trimmed = text.strip(_RUST_WHITESPACE)
+    if re.fullmatch(r"[0-9a-fA-F]{64}", trimmed) is None:
+        raise ValueError("a public key file must hold exactly 64 hexadecimal digits (32 bytes), "
+                         "optionally surrounded by whitespace")
+    return trimmed.lower()
+
+
 def load_public_keys(paths) -> dict[str, str]:
-    """Read .pub files into {key_id: public_hex}."""
+    """Read .pub files into {key_id: public_hex}. A malformed file raises ValueError."""
     keys: dict[str, str] = {}
     for p in paths or ():
-        pub = Path(p).read_text(encoding="utf-8").strip()
-        bytes.fromhex(pub)  # fail early on a malformed file
+        try:
+            pub = parse_public_hex(Path(p).read_text(encoding="utf-8"))
+        except ValueError as exc:  # includes UnicodeDecodeError
+            raise ValueError(f"{p}: {exc}") from exc
         keys[key_id_for(pub)] = pub
     return keys
 
