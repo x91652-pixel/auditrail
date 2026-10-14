@@ -260,11 +260,25 @@ class PolicyEngine:
             if name not in self.known_categories:
                 raise PolicyError(unknown_category_message(name, self.known_categories,
                                                            f"tool '{tool}' at the call site"))
-        labelled = {where: frozenset(cfg["tool_categories"][tool])
-                    for where, cfg in self._sections({"default": self.default, "agents": self.agents})
-                    if isinstance(cfg.get("tool_categories"), dict) and tool in cfg["tool_categories"]}
-        if len(set(labelled.values())) > 1:
-            shown = "; ".join(f"{w}: {sorted(c)}" for w, c in labelled.items())
+        # Every section that mentions the tool, either by labelling it or by allowing it. A section that
+        # allows it without a label counts as "no categories" (None for the message).
+        mentions = {}
+        for where, cfg in self._sections({"default": self.default, "agents": self.agents}):
+            cats = cfg.get("tool_categories") if isinstance(cfg.get("tool_categories"), dict) else {}
+            if tool in cats:
+                mentions[where] = ("labelled", frozenset(cats[tool]))
+            elif tool in (cfg.get("allowed_tools") or []):
+                mentions[where] = ("unlabelled", frozenset())
+        if len({labels for _, labels in mentions.values()}) > 1:
+            silent = [w for w, (how, _) in mentions.items() if how == "unlabelled"]
+            labelled = {w: sorted(c) for w, (how, c) in mentions.items() if how == "labelled"}
+            if silent and labelled:
+                w_lab = next(iter(labelled))
+                raise PolicyError(
+                    f"tool '{tool}' is labelled in {w_lab} ({labelled[w_lab]}) but {silent[0]} allows it without "
+                    f"labelling it, so the same function would be unclassified there. Add the same label under "
+                    f"'tool_categories' in {silent[0]}, or remove it from that section's 'allowed_tools'.")
+            shown = "; ".join(f"{w}: {sorted(c)}" for w, (_, c) in mentions.items())
             raise PolicyError(f"tool '{tool}' is labelled differently in different sections ({shown}). It is one "
                               "function, so it needs one label set; make the sections agree.")
         why = label_conflict(tool, categories)
