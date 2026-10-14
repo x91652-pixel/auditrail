@@ -193,6 +193,82 @@ def main() -> None:
     (d / "ledger.jsonl").write_bytes(data[:100] + b"\xff\xfe" + data[100:])
     write_expected(d, {"status": "TAMPERED_LEDGER"}, {})
 
+    # ---- 16-24: optional signature-algorithm and format identifiers (D-11). Added after the original 15,
+    # which are untouched: a record without `sig_alg` means ed25519 and is byte-identical to before.
+    class FutureSigner(Signer):
+        """Signs with the same Ed25519 key but declares an algorithm token this verifier set does not implement."""
+
+        alg = "x-future-alg"
+
+    future = FutureSigner.from_seed(RECORDER_SEED)
+
+    # 16. written by a writer using an algorithm no verifier here implements; keys are given
+    d = OUT / "16-unsupported-algorithm"
+    build(d, future, Clock())
+    assert b'"sig_alg":"x-future-alg"' in (d / "ledger.jsonl").read_bytes()
+    write_expected(d, {"status": "UNSUPPORTED_ALGORITHM", "bad_seq": 0}, {"require_signatures": True})
+
+    # 17. the same bytes, no keys given: signatures are not checked anyway, so this is OK (and says what it skipped)
+    d = OUT / "17-unsupported-algorithm-no-keys"
+    build(d, future, Clock())
+    write_expected(d, {"status": "OK", "anchored_upto": None, "unanchored_tail": 7}, {})
+
+    # 18. sig_alg is not a token of the grammar (upper case)
+    d = OUT / "18-sig-alg-upper-case"
+    build(d, signer, Clock())
+    rewrite(d / "ledger.jsonl", lambda r: r[2].update(sig_alg="ES256"), rehash=True)
+    write_expected(d, {"status": "MALFORMED_RECORD", "bad_seq": 2}, {"require_signatures": True})
+
+    # 19. a token followed by a newline is not a token
+    d = OUT / "19-sig-alg-trailing-newline"
+    build(d, signer, Clock())
+    rewrite(d / "ledger.jsonl", lambda r: r[2].update(sig_alg="x-future-alg\n"), rehash=True)
+    write_expected(d, {"status": "MALFORMED_RECORD", "bad_seq": 2}, {"require_signatures": True})
+
+    # 20. the default written out: one meaning, one encoding
+    d = OUT / "20-sig-alg-explicit-ed25519"
+    build(d, signer, Clock())
+    rewrite(d / "ledger.jsonl", lambda r: r[2].update(sig_alg="ed25519"), rehash=True)
+    write_expected(d, {"status": "MALFORMED_RECORD", "bad_seq": 2}, {"require_signatures": True})
+
+    # 21. a record of another format that still chains is declined, not misread
+    d = OUT / "21-format-3"
+    build(d, signer, Clock())
+    rewrite(d / "ledger.jsonl", lambda r: r[2].update(format=3), rehash=True)
+    write_expected(d, {"status": "UNSUPPORTED_FORMAT", "bad_seq": 2}, {})
+
+    # 22. a signed anchor of anchor_version 3 naming an algorithm nobody here implements
+    d = OUT / "22-anchor-v3-unsupported-algorithm"
+    clock = Clock()
+    led = build(d, signer, clock)
+    anchor_ledger(led, d / "anchors.jsonl", sink=FileSink(d / "witness.jsonl"), signer=future, clock=clock)
+    assert json.loads((d / "witness.jsonl").read_text(encoding="utf-8").splitlines()[0])["anchor_version"] == 3
+    write_expected(d, {"status": "UNSUPPORTED_ALGORITHM"}, {"require_signatures": True, "witness": "witness.jsonl"})
+
+    # 23. an anchor_version 2 line that carries sig_alg: not allowed there
+    d = OUT / "23-anchor-v2-with-sig-alg"
+    clock = Clock()
+    led = build(d, signer, clock)
+    anchor_ledger(led, d / "anchors.jsonl", sink=FileSink(d / "witness.jsonl"), signer=signer, clock=clock)
+    line = json.loads((d / "witness.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    line["sig_alg"] = "x-future-alg"
+    put(d / "witness.jsonl", _canonical(line) + "\n")
+    write_expected(d, {"status": "TAMPERED_ANCHOR"}, {"require_signatures": True, "witness": "witness.jsonl"})
+
+    # 24. anchor_version 3 with the default spelled out
+    d = OUT / "24-anchor-v3-explicit-ed25519"
+    clock = Clock()
+    led = build(d, signer, clock)
+    anchor_ledger(led, d / "anchors.jsonl", sink=FileSink(d / "witness.jsonl"), signer=future, clock=clock)
+    line = json.loads((d / "witness.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    line["sig_alg"] = "ed25519"
+    body = {k: line[k] for k in ("anchor_version", "seq", "head_hash", "prev_anchor", "created_at", "key_id", "sig_alg")}
+    import hashlib
+
+    line["anchor_hash"] = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+    put(d / "witness.jsonl", _canonical(line) + "\n")
+    write_expected(d, {"status": "TAMPERED_ANCHOR"}, {"require_signatures": True, "witness": "witness.jsonl"})
+
     for lock in OUT.rglob("*.lock"):
         lock.unlink()
     print(f"wrote {sum(1 for p in OUT.iterdir() if p.is_dir())} cases to {OUT}")
