@@ -336,7 +336,10 @@ def serve(args) -> int:
             signal.signal(getattr(signal, sig), _term)
     try:
         while True:
-            time.sleep(3600)
+            # Short sleeps, not one long one: on Windows a signal handler only runs when the main thread
+            # comes back to the interpreter, and time.sleep(3600) is woken by Ctrl+C but not by Ctrl+Break
+            # or a console close, so the shutdown path (final heartbeat and anchor) was never reached.
+            time.sleep(0.5)
     except KeyboardInterrupt:
         svc.stop()
         print("[RECORDER] stopped; final heartbeat and anchor written", flush=True)

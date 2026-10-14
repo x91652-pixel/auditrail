@@ -294,18 +294,13 @@ def test_h5_a_separate_os_process_records_what_an_agent_appends(tmp_path):
     assert {r["recorder_id"] for r in recs if r["kind"] == "heartbeat"} >= {"recorder", "agent-d7"}
 
 
-@pytest.mark.xfail(
-    os.name == "nt", strict=True,
-    reason="BUG (found by T-009, not fixed): on Windows the recorder's SIGBREAK handler cannot interrupt "
-           "time.sleep(3600) in recorder.serve(), so Ctrl+Break never reaches the shutdown path and the "
-           "final heartbeat/anchor are not written. Ctrl+C is not affected. See the T-009 report.")
 def test_h5_the_stop_signal_makes_it_exit_cleanly_with_a_final_heartbeat_and_anchor(tmp_path):
     proc, out, port, key, pub = _spawn_recorder(tmp_path)
     try:
         assert port, "recorder did not report a port:\n" + "".join(out)
         _use_the_recorder(port)
     finally:
-        code = _stop(proc, out, timeout=5 if os.name == "nt" else 30)
+        code = _stop(proc, out, timeout=30)
     text = "".join(out)
     assert code == 0, f"exit code {code} (None = had to be killed):\n{text}"
     assert "stopped; final heartbeat and anchor written" in text
