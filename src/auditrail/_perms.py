@@ -18,6 +18,7 @@ the check says it could not check; it never reports "fine" in that case.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,11 +70,27 @@ def parse_acl_lines(acl_lines) -> list:
         sid, kind, rights = parts
         if not sid.startswith("S-") or kind not in ("Allow", "Deny"):
             continue
-        try:
-            entries.append((sid, kind, int(rights)))
-        except ValueError:
+        if re.fullmatch(r"-?[0-9]+", rights) is None:  # not int(): that accepts "1_0", " 5", "+5"
             continue
+        entries.append((sid, kind, int(rights)))
     return entries
+
+
+_BROAD_PATTERNS = [re.compile(r"(?<![0-9A-Za-z-])" + re.escape(sid) + r"(?![0-9A-Za-z-])", re.I) for sid in _BROAD_SIDS] + [
+    re.compile(r"(?<![0-9A-Za-z])" + re.escape(name) + r"(?![0-9A-Za-z])", re.I) for name in _BROAD_SIDS.values()]
+
+
+def unparsed_broad_lines(acl_lines) -> list:
+    """Lines that mention a broad group (its SID or its name) but are not a valid entry.
+
+    The check cannot tell what such a line meant to grant, so a file with one is not 'checked'.
+    Blank lines and lines that mention no broad group are ignored: they cannot hide one.
+    """
+    out = []
+    for line in acl_lines:
+        if line.strip() and not parse_acl_lines([line]) and any(p.search(line) for p in _BROAD_PATTERNS):
+            out.append(line)
+    return out
 
 
 def windows_findings(acl_lines: list[str], role: str) -> list[str]:
@@ -131,6 +148,11 @@ def permission_findings(path: Union[str, os.PathLike], role: str) -> list[Findin
         # file has at least one ACE, so an empty result means the listing did not work.
         return [Finding("unchecked", f"{p}: permissions NOT CHECKED (PowerShell succeeded but returned no "
                                      "parseable access-control entries)")]
+    odd = unparsed_broad_lines(lines)
+    if odd:
+        shown = "; ".join(repr(x[:80]) for x in odd[:3])
+        return [Finding("unchecked", f"{p}: permissions NOT CHECKED (PowerShell printed {len(odd)} line(s) that "
+                                     f"mention a broad group but could not be parsed: {shown})")]
     return [Finding("loose", f"{p}: {m}") for m in windows_findings(lines, role)]
 
 
