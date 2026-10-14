@@ -177,7 +177,7 @@ class Clock:
         return self.t
 
 
-def _beat(led, attempted=0, recorded=0, tools=("t",), policy_hash="p1"):
+def _beat(led, attempted=0, recorded=0, tools=("t",), policy_hash="1" * 64):
     led.record_heartbeat(recorder_id="r", tools=list(tools), policy_version="v1", policy_hash=policy_hash,
                          calls_attempted=attempted, calls_recorded=recorded, interval_s=60)
 
@@ -213,7 +213,7 @@ def test_tool_and_policy_changes_are_listed(tmp_path):
     led = Ledger(tmp_path / "l.jsonl", clock=clock)
     _beat(led, tools=("a",))
     clock.t += 30
-    _beat(led, tools=("a", "send_email"), policy_hash="p2")
+    _beat(led, tools=("a", "send_email"), policy_hash="2" * 64)
     r = verify_all(led.path, max_gap_s=60)
     assert r["status"] == "OK"
     assert r["changes"] == [{"seq": 1, "ts": r["changes"][0]["ts"], "tools_added": ["send_email"],

@@ -144,6 +144,15 @@ fn parse_ledger(bytes: &[u8]) -> Result<Vec<Map<String, Value>>, Report> {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return Err(Report::fail("TAMPERED_LEDGER", "ledger file is not valid UTF-8".into(), None));
     };
+    if nonblank_lines(text).first().map_or(false, |(_, l)| !l.contains("\"format\":")) {
+        return Err(Report::fail(
+            "LEGACY_FORMAT",
+            "this ledger has no `format` field: it was written by auditrail v0.1, which the v2 verifier does not judge \
+             (it may hold floats and cannot be signed)"
+                .into(),
+            None,
+        ));
+    }
     let mut records = Vec::new();
     for (lineno, line) in nonblank_lines(text) {
         match parse_object(line) {
@@ -208,6 +217,11 @@ fn check_fields(rec: &Map<String, Value>) -> Option<&'static str> {
         if !k.is_string() {
             return Some("kind is not a string");
         }
+    }
+    match rec.get("policy_hash") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(h)) if is_lower_hex(h, 64) => {}
+        Some(_) => return Some("policy_hash is not 64 lowercase hex characters (or null)"),
     }
     if kind.and_then(Value::as_str) == Some("heartbeat") {
         let ok_tools = matches!(rec.get("tools"), Some(Value::Array(a)) if a.iter().all(Value::is_string));

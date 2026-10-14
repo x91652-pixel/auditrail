@@ -302,7 +302,8 @@ class Guard:
                 decision: Decision = self.policy.check(session, name, extra_categories=categories)
                 call_args = {"args": args, "kwargs": kwargs}
                 common = dict(agent_id=session.agent_id, session_id=session.session_id, trace_id=session.trace_id,
-                              policy_version=self.policy.version, tool=name, categories=categories, args=call_args)
+                              policy_version=self.policy.version, policy_hash=self.policy.policy_hash,
+                              tool=name, categories=categories, args=call_args)
 
                 if not decision.allow:
                     self._write(**common, decision="deny", reason=decision.reason)

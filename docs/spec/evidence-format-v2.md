@@ -39,6 +39,10 @@ Two verifiers that disagree about an odd input give an attacker the input the we
 one accepts, so reading is specified exactly. A verifier MUST:
 
 - reject a file that is not valid UTF-8 (`TAMPERED_LEDGER`, no `bad_seq`);
+- answer `LEGACY_FORMAT` (not OK, and not a tamper alarm) when the first non-blank line has no `"format":`
+  member: that is a v0.1 ledger, which may hold floats and cannot be signed, so these rules do not apply to it.
+  The test is a plain substring check, so every implementation answers identically even on input it could not
+  parse. A v2 record that lost its `format` field lands here too, which is still not OK;
 - split lines on `\n` only, ignore one trailing `\r` per line, and skip a line made only
   of spaces, tabs and `\r`. Any other character (U+2028, U+0085, form feed, ...) is
   content, not a line break or blank;
@@ -70,10 +74,13 @@ Every record has:
 
 Further fields depend on `kind`.
 
-**`call`**: `agent_id`, `session_id`, `trace_id`, `policy_version`, `tool`,
+**`call`**: `agent_id`, `session_id`, `trace_id`, `policy_version`, `policy_hash`, `tool`,
 `categories` (sorted list), `args_digest`, `decision` (`allow`, `deny`,
 `sandboxed`, `error`), `reason` (string or null), `result_digest` (string or
-null), `duration_us` (int or null). Arguments and results are never stored,
+null), `duration_us` (int or null). `policy_hash` is the SHA-256 of the whole policy in force
+(64 lowercase hex, or null when the writer does not know it): a version string can be reused after the
+rules change, the hash cannot, so every recorded decision can be tied to the exact rules that produced it.
+Arguments and results are never stored,
 only `SHA-256` of their canonical JSON. For `error`, `reason` is the exception
 type plus a digest of its message unless the operator opted into storing the text.
 
@@ -142,7 +149,7 @@ status; the optional inputs decide which checks run.
 |---|---|---|
 | 1 | the file reads under the rules in section 2; `seq` is the integer 0,1,2,...; `prev_hash` links; `hash` recomputes | `TAMPERED_LEDGER` (+`bad_seq`) |
 | 2 | **if trusted public keys were given:** every record has a non-empty string `key_id` and `sig`; the key is trusted; the signature verifies | `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `BAD_SIGNATURE` (+`bad_seq`) |
-| 2b | after a record's hash (and signature, if keys were given) hold: `ts` is a valid timestamp; `kind`, if present, is a string; a `heartbeat` has `tools` (list of strings) and integer `calls_attempted` / `calls_recorded` | `MALFORMED_RECORD` (+`bad_seq`) |
+| 2b | after a record's hash (and signature, if keys were given) hold: `ts` is a valid timestamp; `kind`, if present, is a string; `policy_hash`, if present, is null or 64 lowercase hex; a `heartbeat` has `tools` (list of strings) and integer `calls_attempted` / `calls_recorded` | `MALFORMED_RECORD` (+`bad_seq`) |
 | 3 | **if an anchors file was given:** each line is well formed and its `anchor_hash` recomputes; `prev_anchor` links; with keys given, version-2 lines are signed by a trusted key and version-1 lines are refused; the ledger has a record at each anchored `seq` whose `hash` equals `head_hash` | `TAMPERED_ANCHOR`, `UNSIGNED_ANCHOR`, `UNKNOWN_KEY`, `BAD_SIGNATURE`, `TRUNCATED`, `REWRITTEN` |
 | 4 | **if a witness copy was given:** the same per-line and ledger checks as 3 (without `prev_anchor` linking) | same |
 | 5 | **if a maximum gap was given:** the ledger has at least one heartbeat (`NO_HEARTBEAT`); no heartbeat reports `calls_attempted != calls_recorded` (`UNRECORDED_CALLS`); no interval between the first record, each heartbeat, and the last record exceeds the gap (`HEARTBEAT_GAP`) | as named |
@@ -206,10 +213,10 @@ A signed message proves who sent it. It does not make its content safe.
 
 ## 10. Conformance
 
-[`vectors/`](vectors/) holds thirteen cases (ledgers, keys, witness copies,
+[`vectors/`](vectors/) holds fifteen cases (ledgers, keys, witness copies,
 `expected.json`) covering a valid ledger, edits with and without recomputed
 hashes, truncation, a rebuilt ledger under another key, a heartbeat gap, unrecorded
-calls, a nonsense timestamp, a float, and a non-UTF-8 file. `vectors/generate.py`
+calls, a nonsense timestamp, a malformed `policy_hash`, a float, a non-UTF-8 file, and a genuine v0.1 ledger. `vectors/generate.py`
 regenerates them byte-for-byte.
 
 Vectors prove the common cases. For the rest, the reference implementations are also

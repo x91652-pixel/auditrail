@@ -30,6 +30,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
+from ._strict import is_hex
 from .keys import TAG_RECORD, Signer, verify_sig
 
 GENESIS_HASH = "0" * 64
@@ -82,7 +83,7 @@ class InvalidRecord(AssertionError, ValueError):
     """A record the ledger refuses to write (for example an unknown decision value)."""
 
 
-CALL_FIELDS = ("kind", "agent_id", "session_id", "trace_id", "policy_version", "tool", "categories",
+CALL_FIELDS = ("kind", "agent_id", "session_id", "trace_id", "policy_version", "policy_hash", "tool", "categories",
                "args_digest", "decision", "reason", "result_digest", "duration_us")
 
 
@@ -99,10 +100,18 @@ def call_fields(
     result: Any = None,
     duration_ms: Optional[float] = None,
     trace_id: Optional[str] = None,
+    policy_hash: Optional[str] = None,
 ) -> dict:
-    """The fields of one call record, with arguments and result reduced to digests."""
+    """The fields of one call record, with arguments and result reduced to digests.
+
+    policy_hash is the SHA-256 of the whole policy in force (PolicyEngine.policy_hash). A version
+    string alone can be reused after the rules change; the hash cannot. None means "not known"
+    and is allowed, but a guarded call always supplies it.
+    """
     if decision not in DECISIONS:
         raise InvalidRecord(f"decision must be one of {DECISIONS}, got {decision!r}")
+    if policy_hash is not None and not is_hex(policy_hash, 64):
+        raise InvalidRecord("policy_hash must be 64 lowercase hex characters (or None)")
     has_result = decision in ("allow", "sandboxed") and result is not None
     return {
         "kind": "call",
@@ -110,6 +119,7 @@ def call_fields(
         "session_id": session_id,
         "trace_id": trace_id or session_id,
         "policy_version": policy_version,
+        "policy_hash": policy_hash,
         "tool": tool,
         "categories": sorted(categories),
         "args_digest": _digest(args),
@@ -265,12 +275,13 @@ class Ledger:
         result: Any = None,
         duration_ms: Optional[float] = None,
         trace_id: Optional[str] = None,
+        policy_hash: Optional[str] = None,
     ) -> EvidenceRecord:
         """Record one tool-call decision. duration_ms is stored as integer microseconds."""
         return self.append_call(call_fields(
             agent_id=agent_id, session_id=session_id, policy_version=policy_version, tool=tool,
             categories=categories, args=args, decision=decision, reason=reason, result=result,
-            duration_ms=duration_ms, trace_id=trace_id,
+            duration_ms=duration_ms, trace_id=trace_id, policy_hash=policy_hash,
         ))
 
     def append_call(self, fields: dict) -> EvidenceRecord:
@@ -300,7 +311,7 @@ class Ledger:
         recorder_id: str,
         tools: list[str],
         policy_version: str,
-        policy_hash: str,
+        policy_hash: Optional[str],
         calls_attempted: int,
         calls_recorded: int,
         interval_s: int,
@@ -310,7 +321,11 @@ class Ledger:
         calls_attempted / calls_recorded count, since this writer's previous
         heartbeat, the tool calls it intercepted and the ones it managed to write.
         A difference means calls ran without evidence. A gap between heartbeats
-        longer than expected is visible to the verifier as a period with no coverage."""
+        longer than expected is visible to the verifier as a period with no coverage.
+
+        policy_hash is 64 lowercase hex, or None when the writer does not know the policy."""
+        if policy_hash is not None and not is_hex(policy_hash, 64):
+            raise InvalidRecord("policy_hash must be 64 lowercase hex characters (or None)")
         return self.record_event(
             "heartbeat",
             recorder_id=recorder_id,

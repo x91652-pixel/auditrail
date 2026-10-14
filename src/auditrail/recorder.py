@@ -45,7 +45,7 @@ class RecorderService:
         port: int = 0,
         token: Optional[str] = None,
         policy_version: str = "",
-        policy_hash: str = "",
+        policy_hash: Optional[str] = None,
         heartbeat_s: int = 60,
         anchors_path: Optional[str] = None,
         sink: Any = None,
@@ -248,7 +248,7 @@ def serve(args) -> int:
 
     signer = Signer.from_file(args.key)
     ledger = Ledger(args.ledger, signer=signer)
-    policy_version = policy_hash = ""
+    policy_version, policy_hash = "", None  # no policy file: heartbeats say "unknown" rather than inventing a hash
     if args.policy:
         engine = PolicyEngine.from_yaml(args.policy)
         policy_version, policy_hash = engine.version, engine.policy_hash
