@@ -79,8 +79,9 @@ def windows_findings(acl_lines: list[str], role: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Finding:
-    """kind "loose": the file IS open to other accounts. kind "unchecked": the check could not run
-    (missing file, no PowerShell, ...) -- that is not a pass and must be reported as such."""
+    """kind "loose": the file IS open to other accounts. kind "unchecked": the check could not run (no
+    PowerShell, it failed, it timed out) -- not a pass; the recorder refuses to start on it unless told
+    otherwise. kind "missing": the file does not exist (yet)."""
 
     kind: str
     message: str
@@ -99,7 +100,7 @@ def permission_findings(path: Union[str, os.PathLike], role: str) -> list[Findin
     """Findings for one file. An empty list means nothing suspicious was found (not "safe")."""
     p = Path(path)
     if not p.exists():
-        return [Finding("unchecked", f"{p} does not exist, so its permissions are NOT CHECKED")]
+        return [Finding("missing", f"{p} does not exist, so its permissions are NOT CHECKED")]
     if os.name != "nt":
         return [Finding("loose", f"{p}: {m}") for m in posix_findings(p.stat().st_mode, role)]
     try:

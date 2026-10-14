@@ -286,18 +286,29 @@ def serve(args) -> int:
 
     findings = _permission_findings_for_start(args.key, args.ledger, args.anchors)
     loose = [f for f in findings if f.kind == "loose"]
+    unchecked = [f for f in findings if f.kind == "unchecked"]
     for f in findings:
-        if f.kind == "unchecked":  # never counted as a pass; it also never blocks, because we cannot know
-            print(f"[RECORDER][WARN] NOT CHECKED: {f.message}", flush=True)
-    if loose and not getattr(args, "allow_loose_permissions", False):
+        if f.kind == "missing":  # a key that is absent fails below with its own error; a new ledger is created
+            print(f"[RECORDER][WARN] {f.message}", flush=True)
+    allow = getattr(args, "allow_loose_permissions", False)
+    if (loose or unchecked) and not allow:
         for f in loose:
             print(f"[RECORDER][ERROR] {f.message}", flush=True)
-        print("[RECORDER] REFUSING TO START: files the recorder depends on are open to other accounts. "
-              "Fix the permissions, or start anyway with --allow-loose-permissions (then this is a warning).",
-              flush=True)
+        for f in unchecked:
+            print(f"[RECORDER][ERROR] {f.message}", flush=True)
+        why = []
+        if loose:
+            why.append("files the recorder depends on are open to other accounts")
+        if unchecked:
+            why.append("the permission check could not run, and an unknown is treated as unsafe")
+        print(f"[RECORDER] REFUSING TO START: {'; '.join(why)}. Fix the cause, or start anyway with "
+              "--allow-loose-permissions (loose permissions then become warnings, and an unchecked file is "
+              "reported as NOT CHECKED).", flush=True)
         return 2
     for f in loose:
         print(f"[RECORDER][WARN] loose permissions accepted (--allow-loose-permissions): {f.message}", flush=True)
+    for f in unchecked:
+        print(f"[RECORDER][WARN] NOT CHECKED (accepted with --allow-loose-permissions): {f.message}", flush=True)
     signer = Signer.from_file(args.key)
     ledger = Ledger(args.ledger, signer=signer)
     policy_version, policy_hash = "", None  # no policy file: heartbeats say "unknown" rather than inventing a hash

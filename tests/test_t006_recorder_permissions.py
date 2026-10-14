@@ -26,9 +26,10 @@ def test_d4_posix_findings_are_classified_loose_not_unchecked():
     assert f.loose and not f.unchecked
 
 
-def test_d4_a_missing_file_is_unchecked_not_loose(tmp_path):
+def test_d4_a_missing_file_is_missing_not_loose(tmp_path):
+    # T-010b/D-10 split the old "unchecked" kind: "missing" = no such file, "unchecked" = the check could not run
     findings = _perms.permission_findings(tmp_path / "nope.key", "secret")
-    assert [x.kind for x in findings] == ["unchecked"]
+    assert [x.kind for x in findings] == ["missing"]
     assert "NOT CHECKED" in findings[0].message
 
 
@@ -165,13 +166,14 @@ def test_d4_a_loose_ledger_is_refused_too(tmp_path, capsys, monkeypatch):
     assert code != 0 and "REFUSING TO START" in out and "ledger" in out
 
 
-def test_d4_unchecked_is_reported_but_does_not_block_start(tmp_path, capsys, monkeypatch):
+def test_d4_a_missing_file_is_reported_but_does_not_block_start(tmp_path, capsys, monkeypatch):
+    # T-010b/D-10: only "unchecked" (the check could not run) refuses by default now; see test_t010b_recorder.py
     from auditrail import recorder
 
     monkeypatch.setenv("AUDITRAIL_RECORDER_TOKEN", "t")
     key, _ = Signer.generate().save(tmp_path / "rec")
     monkeypatch.setattr(recorder, "_permission_findings_for_start",
-                        lambda *a, **k: [_perms.Finding("unchecked", f"{key}: permissions NOT CHECKED (PowerShell unavailable)")])
+                        lambda *a, **k: [_perms.Finding("missing", f"{key} does not exist, so its permissions are NOT CHECKED")])
     started = threading.Event()
 
     def fake_start(self):
