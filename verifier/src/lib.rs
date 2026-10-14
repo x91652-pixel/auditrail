@@ -19,6 +19,27 @@ pub const GENESIS: &str = "00000000000000000000000000000000000000000000000000000
 const TAG_RECORD: &[u8] = b"auditrail/record/v2\n";
 const TAG_ANCHOR: &[u8] = b"auditrail/anchor/v2\n";
 const MAX_DEPTH: usize = 64;
+/// The format version this verifier reads. A record with another integer `format` is declined, not misread.
+const FORMAT_VERSION: i64 = 2;
+/// What a record or anchor without `sig_alg` means. It is written by omission, never explicitly.
+const DEFAULT_ALG: &str = "ed25519";
+/// Signature algorithms this verifier implements.
+const SUPPORTED_ALGS: &[&str] = &[DEFAULT_ALG];
+
+/// 1-32 of a-z, 0-9 and '-', all ASCII (the format's grammar for a `sig_alg` token).
+fn is_alg_token(a: &str) -> bool {
+    !a.is_empty() && a.len() <= 32 && a.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Why a record's `sig_alg` member is unacceptable, or None. Absent is fine (it means ed25519).
+fn sig_alg_problem(rec: &Map<String, Value>) -> Option<&'static str> {
+    match rec.get("sig_alg") {
+        None => None,
+        Some(Value::String(a)) if is_alg_token(a) && a != DEFAULT_ALG => None,
+        Some(Value::String(a)) if a == DEFAULT_ALG => Some("sig_alg is \"ed25519\", which is written by leaving the member out"),
+        Some(_) => Some("sig_alg is not a lower-case algorithm token ([a-z0-9-], 1-32 characters)"),
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Options {
@@ -39,11 +60,16 @@ pub struct Report {
     pub records: usize,
     pub anchored_upto: Option<i64>,
     pub unanchored_tail: Option<i64>,
+    /// Signature algorithms present in the ledger that this verifier cannot check (set on OK only).
+    pub unchecked_algorithms: Vec<String>,
 }
 
 impl Report {
     fn fail(status: &str, detail: String, bad_seq: Option<i64>) -> Report {
-        Report { status: status.into(), detail, bad_seq, records: 0, anchored_upto: None, unanchored_tail: None }
+        Report {
+            status: status.into(), detail, bad_seq, records: 0, anchored_upto: None, unanchored_tail: None,
+            unchecked_algorithms: Vec::new(),
+        }
     }
     pub fn ok(&self) -> bool {
         self.status == "OK"
@@ -52,6 +78,7 @@ impl Report {
         json!({
             "status": self.status, "detail": self.detail, "bad_seq": self.bad_seq, "records": self.records,
             "anchored_upto": self.anchored_upto, "unanchored_tail": self.unanchored_tail,
+            "unchecked_algorithms": self.unchecked_algorithms,
         })
     }
 }
@@ -223,6 +250,9 @@ fn check_fields(rec: &Map<String, Value>) -> Option<&'static str> {
         Some(Value::String(h)) if is_lower_hex(h, 64) => {}
         Some(_) => return Some("policy_hash is not 64 lowercase hex characters (or null)"),
     }
+    if let Some(why) = sig_alg_problem(rec) {
+        return Some(why);
+    }
     if kind.and_then(Value::as_str) == Some("heartbeat") {
         let ok_tools = matches!(rec.get("tools"), Some(Value::Array(a)) if a.iter().all(Value::is_string));
         if !ok_tools {
@@ -239,6 +269,7 @@ fn anchor_body_keys(version: i64) -> Option<&'static [&'static str]> {
     match version {
         1 => Some(&["anchor_version", "seq", "head_hash", "prev_anchor", "created_at"]),
         2 => Some(&["anchor_version", "seq", "head_hash", "prev_anchor", "created_at", "key_id"]),
+        3 => Some(&["anchor_version", "seq", "head_hash", "prev_anchor", "created_at", "key_id", "sig_alg"]),
         _ => None,
     }
 }
@@ -256,7 +287,7 @@ fn check_anchor_line(rec: &Map<String, Value>, keys: &Option<HashMap<String, [u8
         return Err(tam("malformed anchor line"));
     }
     let allowed = |k: &String| {
-        body_keys.contains(&k.as_str()) || matches!(k.as_str(), "anchor_hash" | "sink_ref") || (version == 2 && k == "sig")
+        body_keys.contains(&k.as_str()) || matches!(k.as_str(), "anchor_hash" | "sink_ref") || ((version == 2 || version == 3) && k == "sig")
     };
     if rec.keys().any(|k| !allowed(k)) {
         return Err(tam("unexpected fields in anchor line"));
@@ -274,16 +305,30 @@ fn check_anchor_line(rec: &Map<String, Value>, keys: &Option<HashMap<String, [u8
     for k in body_keys {
         body.insert((*k).to_string(), rec[*k].clone());
     }
+    if version == 3 {
+        // never an explicit ed25519, and always a token
+        let alg = s(rec, "sig_alg").unwrap_or("");
+        if !is_alg_token(alg) || alg == DEFAULT_ALG {
+            return Err(tam("malformed anchor line"));
+        }
+    }
     let anchor_hash = sha256_hex(canonical(&Value::Object(body)).as_bytes());
     if s(rec, "anchor_hash") != Some(anchor_hash.as_str()) {
         return Err(tam("anchor_hash does not match body"));
     }
-    if version == 2 {
+    if version == 2 || version == 3 {
+        let alg = if version == 3 { s(rec, "sig_alg").unwrap_or("") } else { DEFAULT_ALG };
         let key_id = s(rec, "key_id").unwrap_or("");
         if let Some(map) = keys {
             match map.get(key_id) {
                 None => return Err(("UNKNOWN_KEY".into(), format!("anchor is signed by key_id={key_id}, which is not in the trusted keys"))),
                 Some(p) => {
+                    if !SUPPORTED_ALGS.contains(&alg) {
+                        return Err((
+                            "UNSUPPORTED_ALGORITHM".into(),
+                            format!("anchor is signed with algorithm '{alg}', which this verifier does not implement; its signature was not checked (this is not evidence of tampering)"),
+                        ));
+                    }
                     if !check_sig(p, TAG_ANCHOR, &anchor_hash, s(rec, "sig").unwrap_or("")) {
                         return Err(("BAD_SIGNATURE".into(), "anchor signature does not verify".into()));
                     }
@@ -387,6 +432,13 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         if s(rec, "hash").is_none() || record_hash(&prev, rec) != stored {
             return bad("TAMPERED_LEDGER", format!("seq={i}: hash does not match the record's contents"));
         }
+        if rec.get("format").map_or(false, |_| is_int(rec.get("format"))) && rec["format"].as_i64() != Some(FORMAT_VERSION) {
+            // after the hash held: a different format that still chains is declined, not misread
+            return bad(
+                "UNSUPPORTED_FORMAT",
+                format!("seq={i}: format {} is not understood by this verifier (it reads format {FORMAT_VERSION})", rec["format"]),
+            );
+        }
         if let Some(keys) = &opts.public_keys {
             let key_id = s(rec, "key_id").filter(|k| !k.is_empty());
             let sig = s(rec, "sig").filter(|k| !k.is_empty());
@@ -396,6 +448,16 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
             let Some(p) = keys.get(key_id) else {
                 return bad("UNKNOWN_KEY", format!("seq={i} is signed by key_id={key_id}, which is not in the trusted keys"));
             };
+            if let Some(why) = sig_alg_problem(rec) {
+                return bad("MALFORMED_RECORD", format!("seq={i}: {why}"));
+            }
+            let alg = s(rec, "sig_alg").unwrap_or(DEFAULT_ALG);
+            if !SUPPORTED_ALGS.contains(&alg) {
+                return bad(
+                    "UNSUPPORTED_ALGORITHM",
+                    format!("seq={i} is signed with algorithm '{alg}', which this verifier does not implement; its signature was not checked (this is not evidence of tampering)"),
+                );
+            }
             if !check_sig(p, TAG_RECORD, &stored, sig) {
                 return bad("BAD_SIGNATURE", format!("seq={i}: signature does not verify"));
             }
@@ -475,6 +537,14 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         Some(u) => n as i64 - (u + 1),
         None => n as i64,
     };
+    let mut unchecked: Vec<String> = records
+        .iter()
+        .filter_map(|r| s(r, "sig_alg"))
+        .filter(|a| !SUPPORTED_ALGS.contains(a))
+        .map(String::from)
+        .collect();
+    unchecked.sort();
+    unchecked.dedup();
     Report {
         status: "OK".into(),
         detail: format!("{n} record(s), chain intact"),
@@ -482,5 +552,6 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         records: n,
         anchored_upto: upto,
         unanchored_tail: Some(tail),
+        unchecked_algorithms: unchecked,
     }
 }

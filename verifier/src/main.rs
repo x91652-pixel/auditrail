@@ -114,6 +114,12 @@ fn main() -> ExitCode {
         for n in &not_checked {
             println!("  not checked: {n}");
         }
+        if !report.unchecked_algorithms.is_empty() {
+            println!(
+                "  not checked: records use signature algorithm(s) {:?} that this verifier cannot check",
+                report.unchecked_algorithms
+            );
+        }
     } else {
         println!("[{}] {}", report.status, report.detail);
         if let Some(b) = report.bad_seq {
