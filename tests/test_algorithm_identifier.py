@@ -180,15 +180,13 @@ def test_algorithm_mismatch_between_record_and_trusted_key_is_a_bad_signature(tm
 
 BAD_TOKENS = ["ES256", "Ed25519", "ED25519", " es256", "es256 ", "es256\n", "es\n256", "es256\r", "es256\x00",
               "es_256", "es.256", "ｅｓ２５６", "es２56", "", "a" * 33, "é", None, 5, True, False, ["es256"],
-              {"alg": "es256"}, 1.5]
+              {"alg": "es256"}]  # (a float is rejected while parsing, in both languages: the no-floats rule)
 GOOD_TOKENS = ["x-future-alg", "es256", "ml-dsa-65", "a", "0", "a" * 32, "-", "--"]
 
 
 @pytest.mark.parametrize("value", BAD_TOKENS, ids=lambda v: repr(v))
 def test_a_value_outside_the_grammar_is_malformed_in_both_languages(tmp_path, default_signer, value):
     make_ledger(tmp_path / "l.jsonl", default_signer)
-    if isinstance(value, float):  # floats are rejected at parse time in both languages (TAMPERED_LEDGER)
-        pytest.skip("covered by the no-floats rule")
     rewrite(tmp_path / "l.jsonl", lambda r: r[2].update(sig_alg=value))
     pub = pub_file(tmp_path, default_signer)
     keys = {default_signer.key_id: default_signer.public_hex}
@@ -311,7 +309,7 @@ def test_malformed_anchor_shapes_are_tampered_anchor_in_both_languages(tmp_path,
 # ---------------------------------------------------------------- property: the two readers agree on sig_alg values
 
 token_text = st.one_of(
-    st.sampled_from(BAD_TOKENS[:-1] + GOOD_TOKENS),
+    st.sampled_from(BAD_TOKENS + GOOD_TOKENS),
     st.text(alphabet=st.characters(blacklist_categories=("Cs",)), max_size=40),
     st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789-_ \n\t.", max_size=40),
 )

@@ -1,7 +1,9 @@
 # D-11: optional algorithm and format identifiers
 
-Status: **design proposal, not implemented.** Nothing in `src/`, `verifier/`, `tests/`, `docs/spec/` or the
-conformance vectors changes with this document. Baseline: `hardening-fixes@0bc245b`.
+Status: **decided (D-12, all eight "as recommended") and implemented on branch `d11-sig-alg`.** The sections below
+are the design as proposed; section 6 now records the decisions. Two points were settled while implementing:
+`UNSUPPORTED_FORMAT` is evaluated *after* the record's hash holds (tamper evidence outranks "cannot read"), and
+the grammar token is checked with a whole-string match (the N-1 lesson).
 Decision recorded by the user: reserve an *optional* signature-algorithm identifier and a format identifier in the
 evidence format, with an absent field meaning Ed25519. No ES256, no interoperability with the IETF AAT draft.
 
@@ -230,9 +232,9 @@ test-only algorithm entry, and gets a vector only when a second algorithm exists
 
 ---
 
-## 6. Decisions needed from a person (with a recommendation)
+## 6. Decisions (D-12: all taken as recommended)
 
-| # | question | recommendation |
+| # | question | decision |
 |---|---|---|
 | 1 | Accept or reject an explicit `"sig_alg":"ed25519"`? | **Reject** (`MALFORMED_RECORD`): one encoding per meaning keeps both readers and the fuzzers simple. |
 | 2 | Is `UNSUPPORTED_ALGORITHM` a failure (non-zero exit) or an `OK` with a warning? | **Failure**, exit code 1, but documented as *inconclusive, not tampering*. A green result for something unchecked is the thing this project exists to avoid. |

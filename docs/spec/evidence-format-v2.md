@@ -28,7 +28,9 @@ Section 8 lists what verification can and cannot prove.
   microseconds, and any other fractional value is a string.
 - **Hash**: SHA-256, written as 64 lowercase hex characters.
 - **Signature**: Ed25519 (RFC 8032), written as 128 lowercase hex characters.
-  Keys are 32 bytes, written as 64 hex characters.
+  Keys are 32 bytes, written as 64 hex characters. Ed25519 is the only algorithm this format defines; a record
+  or anchor names another one with the optional `sig_alg` member (3.2, 5), and a verifier that does not
+  implement it says so (6) instead of guessing.
 - **key_id**: the first 16 hex characters of `SHA-256(raw 32-byte public key)`.
 - **Timestamps**: UTC, `YYYY-MM-DDTHH:MM:SSZ`.
 - A ledger is a UTF-8 text file, one canonical JSON object per line, `\n` line endings.
@@ -64,13 +66,14 @@ Every record has:
 
 | field | type | meaning |
 |---|---|---|
-| `format` | int | `2` (absent in v0.1 records, which verify the same way) |
+| `format` | int | `2` (absent in v0.1 records, which verify the same way). An integer other than `2` is declined with `UNSUPPORTED_FORMAT` once the record's hash has held (6). |
 | `seq` | int | 0 for the first record, then +1 each; no gaps |
 | `ts` | string | when the recorder wrote it |
 | `kind` | string | `call`, `heartbeat`, `a2a_send`, `a2a_recv`, `a2a_ack`. Absent in v0.1 records, meaning `call` |
 | `prev_hash` | string | `hash` of the previous record; 64 zeros for `seq` 0 |
 | `hash` | string | see 3.1 |
 | `key_id`, `sig` | string | present when the recorder signs (see 3.2) |
+| `sig_alg` | string | optional; **absent means `ed25519`**, and an Ed25519 writer MUST leave it out (see 3.2) |
 
 Further fields depend on `kind`.
 
@@ -111,6 +114,19 @@ where `hash` is the 64-character hex string as ASCII bytes. The domain tag
 prevents a signature made for one purpose from being replayed for another.
 `sig` is outside the hashed body.
 
+`sig_alg`, when present, names the signature algorithm and **is inside the hashed body** (only `hash` and `sig`
+are excluded, 3.1), so it is committed to by `hash` and by the signature. The domain tag does not change with
+the algorithm. Rules:
+
+- grammar: 1 to 32 ASCII characters from `a-z`, `0-9` and `-`, matched as a whole (a trailing newline or space is
+  not part of a token); anything else is `MALFORMED_RECORD`;
+- `"ed25519"` is never written: the default is expressed by omission, so one meaning has one encoding. An
+  explicit `"sig_alg":"ed25519"` is `MALFORMED_RECORD`;
+- the format defines no token other than the implied `ed25519`; it neither names nor reserves others.
+
+Because an Ed25519 record has no `sig_alg`, its bytes, `hash` and `sig` are exactly what they were before the
+member existed.
+
 ## 4. Why signatures, and what they need
 
 A hash chain alone proves only internal consistency: anyone who can write the
@@ -129,7 +145,10 @@ line   = body + { anchor_hash [, sig] [, sink_ref] }
 sig    = Ed25519( "auditrail/anchor/v2\n" || anchor_hash )          (version 2 only)
 ```
 
-- `anchor_version` 1 is unsigned; 2 carries `key_id` (inside `body`) and `sig`.
+- `anchor_version` 1 is unsigned; 2 carries `key_id` (inside `body`) and `sig`; **3** is a signed anchor whose
+  algorithm is not Ed25519: it carries `sig_alg` (grammar and rules as in 3.2, never `"ed25519"`) inside `body`,
+  next to `key_id`, and is otherwise version 2. An Ed25519 anchor stays version 2. `sig_alg` on a version-1 or
+  version-2 line, or a version-3 line without a valid one, is `TAMPERED_ANCHOR`.
 - `prev_anchor` is the previous anchor's `anchor_hash` (64 zeros for the first),
   so the anchors file is itself a chain.
 - `sink_ref` says where a copy was published; it is not hashed.
@@ -148,8 +167,8 @@ status; the optional inputs decide which checks run.
 | # | check | failure status |
 |---|---|---|
 | 1 | the file reads under the rules in section 2; `seq` is the integer 0,1,2,...; `prev_hash` links; `hash` recomputes | `TAMPERED_LEDGER` (+`bad_seq`) |
-| 2 | **if trusted public keys were given:** every record has a non-empty string `key_id` and `sig`; the key is trusted; the signature verifies | `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `BAD_SIGNATURE` (+`bad_seq`) |
-| 2b | after a record's hash (and signature, if keys were given) hold: `ts` is a valid timestamp; `kind`, if present, is a string; `policy_hash`, if present, is null or 64 lowercase hex; a `heartbeat` has `tools` (list of strings) and integer `calls_attempted` / `calls_recorded` | `MALFORMED_RECORD` (+`bad_seq`) |
+| 2 | **if trusted public keys were given:** every record has a non-empty string `key_id` and `sig`; the key is trusted; `sig_alg`, if present, is valid (3.2) and names an algorithm this verifier implements and the trusted key belongs to; the signature verifies | `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `MALFORMED_RECORD`, `UNSUPPORTED_ALGORITHM`, `BAD_SIGNATURE` (+`bad_seq`). A record naming an algorithm other than its trusted key's is `BAD_SIGNATURE` ("algorithm mismatch"). |
+| 2b | after a record's hash (and signature, if keys were given) hold: `sig_alg`, if present, is valid (3.2); `ts` is a valid timestamp; `kind`, if present, is a string; `policy_hash`, if present, is null or 64 lowercase hex; a `heartbeat` has `tools` (list of strings) and integer `calls_attempted` / `calls_recorded` | `MALFORMED_RECORD` (+`bad_seq`) |
 | 3 | **if an anchors file was given:** each line is well formed and its `anchor_hash` recomputes; `prev_anchor` links; with keys given, version-2 lines are signed by a trusted key and version-1 lines are refused; the ledger has a record at each anchored `seq` whose `hash` equals `head_hash` | `TAMPERED_ANCHOR`, `UNSIGNED_ANCHOR`, `UNKNOWN_KEY`, `BAD_SIGNATURE`, `TRUNCATED`, `REWRITTEN` |
 | 4 | **if a witness copy was given:** the same per-line and ledger checks as 3 (without `prev_anchor` linking) | same |
 | 5 | **if a maximum gap was given:** the ledger has at least one heartbeat (`NO_HEARTBEAT`); no heartbeat reports `calls_attempted != calls_recorded` (`UNRECORDED_CALLS`); no interval between the first record, each heartbeat, and the last record exceeds the gap (`HEARTBEAT_GAP`) | as named |
@@ -160,6 +179,20 @@ every check it was not asked to run. A verifier that prints a bare "OK" is not c
 
 `SINK_UNREACHABLE` (a configured witness could not be read) is not tampering
 evidence, but the verifier MUST NOT claim the anchor was checked.
+
+Two further statuses are *inconclusive*, not alarms:
+
+- `UNSUPPORTED_ALGORITHM`: trusted keys were given and a record (or anchor) names an algorithm this verifier does
+  not implement, so its signature could not be checked. It is **not** `OK`: a verifier MUST NOT report `OK` for a
+  ledger in which any covered record used an algorithm it did not check while signatures were required. It is not
+  evidence of tampering either. Without trusted keys signatures are not checked at all; the result may be `OK`
+  and MUST list the algorithms it could not check.
+- `UNSUPPORTED_FORMAT`: a record's `format` is an integer other than `2` although its hash holds. A ledger
+  whose hash rule differs will fail as `TAMPERED_LEDGER` before this is reached; that is a limit of reading a
+  format one does not know.
+
+When two verifiers implement different algorithms, each answers from its own set; for an algorithm only one
+implements, the other MUST answer `UNSUPPORTED_ALGORITHM` and never `OK`.
 
 ## 7. Key custody (what makes the signatures mean something)
 
