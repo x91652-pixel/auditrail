@@ -1,0 +1,8 @@
+{
+  "args": {
+    "require_signatures": true,
+    "witness": "witness.jsonl"
+  },
+  "bad_seq": 6,
+  "status": "REWRITTEN"
+}

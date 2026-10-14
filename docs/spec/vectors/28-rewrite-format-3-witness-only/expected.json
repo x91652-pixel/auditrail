@@ -1,0 +1,7 @@
+{
+  "args": {
+    "witness": "witness.jsonl"
+  },
+  "bad_seq": 6,
+  "status": "REWRITTEN"
+}

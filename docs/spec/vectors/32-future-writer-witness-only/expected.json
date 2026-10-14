@@ -1,0 +1,8 @@
+{
+  "anchored_upto": 6,
+  "args": {
+    "witness": "witness.jsonl"
+  },
+  "status": "OK",
+  "unanchored_tail": 0
+}

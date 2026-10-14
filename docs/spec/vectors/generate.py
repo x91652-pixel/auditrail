@@ -269,6 +269,68 @@ def main() -> None:
     put(d / "witness.jsonl", _canonical(line) + "\n")
     write_expected(d, {"status": "TAMPERED_ANCHOR"}, {"require_signatures": True, "witness": "witness.jsonl"})
 
+    # ---- 25-32: an inconclusive status (UNSUPPORTED_*) must never hide definite evidence. An attacker without
+    # the key can add a sig_alg or set format to 3 at will, so whenever a witness or a signature can still show
+    # tampering, that is what is reported.
+    def witnessed(name, mutate, keep_len=None):
+        d = OUT / name
+        clock = Clock()
+        led = build(d, signer, clock)
+        anchor_ledger(led, d / "anchors.jsonl", sink=FileSink(d / "witness.jsonl"), signer=signer, clock=clock)
+        (d / "anchors.jsonl").unlink()  # the owner's file is gone; only the witness copy and the key remain
+        if keep_len is not None:
+            lines = (d / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+            put(d / "ledger.jsonl", "\n".join(lines[:keep_len]) + "\n")
+        rewrite(d / "ledger.jsonl", mutate, rehash=True)
+        return d
+
+    # 25. a middle record edited, chain re-hashed, a sig_alg added to it; keys + witness: the next record's old
+    # signature no longer matches its new hash
+    d = witnessed("25-rehash-add-sig-alg-keys-and-witness",
+                  lambda r: r[2].update(decision="allow", reason=None, sig_alg="x-future-alg"))
+    write_expected(d, {"status": "BAD_SIGNATURE", "bad_seq": 3}, {"require_signatures": True, "witness": "witness.jsonl"})
+
+    # 26. the LAST record edited and given a sig_alg (nothing after it to expose the stale signature): the
+    # witness still holds the real head, so the rewrite is found
+    d = witnessed("26-rewrite-last-record-sig-alg-keys-and-witness",
+                  lambda r: r[-1].update(calls_attempted=99, sig_alg="x-future-alg"))
+    write_expected(d, {"status": "REWRITTEN", "bad_seq": 6}, {"require_signatures": True, "witness": "witness.jsonl"})
+
+    # 27. the same but format set to 3: the record is still signed as ed25519, and its signature does not verify
+    d = witnessed("27-rewrite-last-record-format-3-keys-and-witness",
+                  lambda r: r[-1].update(calls_attempted=99, format=3))
+    write_expected(d, {"status": "BAD_SIGNATURE", "bad_seq": 6}, {"require_signatures": True, "witness": "witness.jsonl"})
+
+    # 28. no keys at all, only the witness copy: format 3 does not hide the rewrite
+    d = witnessed("28-rewrite-format-3-witness-only",
+                  lambda r: r[2].update(decision="allow", reason=None, format=3))
+    write_expected(d, {"status": "REWRITTEN", "bad_seq": 6}, {"witness": "witness.jsonl"})
+
+    # 29. witness only, sig_alg added
+    d = witnessed("29-rewrite-sig-alg-witness-only",
+                  lambda r: r[2].update(decision="allow", reason=None, sig_alg="x-future-alg"))
+    write_expected(d, {"status": "REWRITTEN", "bad_seq": 6}, {"witness": "witness.jsonl"})
+
+    # 30. tail cut off and the last remaining record given format 3: still TRUNCATED
+    d = witnessed("30-truncated-format-3-witness-only", lambda r: r[-1].update(format=3), keep_len=4)
+    write_expected(d, {"status": "TRUNCATED"}, {"witness": "witness.jsonl"})
+
+    # 31. a genuine ledger and anchors from a writer using an algorithm nobody here implements: inconclusive,
+    # with the coverage still reported
+    d = OUT / "31-future-writer-keys-and-witness"
+    clock = Clock()
+    led = build(d, future, clock)
+    anchor_ledger(led, d / "anchors.jsonl", sink=FileSink(d / "witness.jsonl"), signer=future, clock=clock)
+    write_expected(d, {"status": "UNSUPPORTED_ALGORITHM", "bad_seq": 0, "anchored_upto": 6, "unanchored_tail": 0},
+                   {"require_signatures": True, "witness": "witness.jsonl"})
+
+    # 32. the same bytes and no keys: nothing was asked to be checked, so OK, and the anchors still match
+    d = OUT / "32-future-writer-witness-only"
+    clock = Clock()
+    led = build(d, future, clock)
+    anchor_ledger(led, d / "anchors.jsonl", sink=FileSink(d / "witness.jsonl"), signer=future, clock=clock)
+    write_expected(d, {"status": "OK", "anchored_upto": 6, "unanchored_tail": 0}, {"witness": "witness.jsonl"})
+
     for lock in OUT.rglob("*.lock"):
         lock.unlink()
     print(f"wrote {sum(1 for p in OUT.iterdir() if p.is_dir())} cases to {OUT}")
