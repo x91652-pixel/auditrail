@@ -98,7 +98,13 @@ replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by ev
   With `enforce_state_change_after_untrusted: true` per agent, such a tool is refused once its workflow has read
   untrusted input, unless it is listed in `state_change_allowed_tools`.
 - `SqliteReplayGuard` replaces the in-memory `ReplayGuard` when several agent processes on one host receive messages.
-- `auditrail recorder` warns at startup about a key file other accounts can read and a missing token.
+- `auditrail recorder` warns at startup about a missing token. **Behavior change:** it now also *refuses to start*
+  (exit code 2) when its signing key is readable by other accounts, or its ledger/anchors are writable by them; pass
+  `--allow-loose-permissions` to get warnings instead. A check that could not run is reported as `NOT CHECKED` and does not
+  block. The Windows check reads the ACL for the broad groups only, so passing it is not proof the key is private.
+- **Behavior change:** `internal` cannot be combined with another category on one tool. Such a policy fails to load
+  (`PolicyError`, naming the tool and the categories), and so does a call-site label that contradicts the policy. Remove one
+  of the two labels; there is no switch to allow the combination.
 
 These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
 see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
