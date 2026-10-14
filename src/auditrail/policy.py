@@ -56,6 +56,28 @@ UNTRUSTED = "untrusted_input"
 INTERNAL = "internal"  # "touches none of the risk categories"; exclusive of every other label
 
 
+def string_list(value, what: str) -> list:
+    """`value` as a list of strings, or PolicyError(what ...).
+
+    Anything else is refused rather than coerced: set("state_change") would quietly become a set of
+    characters, and None or a number would only fail later, at call time, inside the engine.
+    """
+    if not isinstance(value, (list, tuple)):
+        raise PolicyError(f"{what} must be a list of strings, got {type(value).__name__} {value!r}")
+    for item in value:
+        if not isinstance(item, str):
+            raise PolicyError(f"{what} must be a list of strings, found {type(item).__name__} {item!r} in {list(value)!r}")
+    return list(value)
+
+
+def call_site_list(value, what: str) -> list:
+    """Like string_list for labels given in Python code: any iterable of strings, but never a bare string
+    (list("state_change") would be eleven one-letter categories)."""
+    if isinstance(value, (str, bytes, dict)) or not hasattr(value, "__iter__"):
+        raise PolicyError(f"{what} must be a list of strings, got {type(value).__name__} {value!r}")
+    return string_list(list(value), what)
+
+
 def label_conflict(tool: str, categories) -> Optional[str]:
     """Why `categories` is contradictory for `tool`, or None.
 
@@ -99,8 +121,11 @@ class PolicyError(ValueError):
 
 class PolicyEngine:
     def __init__(self, config: dict, strict: Optional[bool] = None):
+        if not isinstance(config, dict):
+            raise PolicyError(f"a policy must be a mapping, got {type(config).__name__}")
         if "version" not in config:
             raise PolicyError("policy is missing required 'version' field")
+        self._validate_structure(config)
         self._validate_options(config)
         self._validate_labels(config)
         from_config = bool(config.get("strict_classification", False))
@@ -125,6 +150,31 @@ class PolicyEngine:
             raise RuntimeError("pyyaml is required to load policy files: pip install pyyaml")
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         return cls(data, strict=strict)
+
+    @staticmethod
+    def _validate_structure(config: dict) -> None:
+        """Every section is a mapping and every list-valued field is a list of strings, at load time."""
+        agents = config.get("agents", {})
+        if not isinstance(agents, dict):
+            raise PolicyError(f"'agents' must be a mapping of agent id to settings, got {type(agents).__name__}")
+        sections = []
+        if "default" in config:
+            sections.append(("default", config["default"]))
+        sections += [(f"agent '{name}'", cfg) for name, cfg in agents.items()]
+        for where, cfg in sections:
+            if not isinstance(cfg, dict):
+                raise PolicyError(f"{where} must be a mapping of settings, got {type(cfg).__name__} {cfg!r}")
+            for field in ("allowed_tools", "trifecta_exempt_tools", "state_change_allowed_tools"):
+                if field in cfg:
+                    string_list(cfg[field], f"'{field}' in {where}")
+            cats = cfg.get("tool_categories", {})
+            if not isinstance(cats, dict):
+                raise PolicyError(f"'tool_categories' in {where} must be a mapping of tool name to a list of "
+                                  f"categories, got {type(cats).__name__} {cats!r}")
+            for tool, value in cats.items():
+                if not isinstance(tool, str):
+                    raise PolicyError(f"tool names in 'tool_categories' ({where}) must be strings, got {tool!r}")
+                string_list(value, f"categories of tool '{tool}' in {where}")
 
     @staticmethod
     def _validate_options(config: dict) -> None:
@@ -155,10 +205,11 @@ class PolicyEngine:
     def check_call_site_labels(self, tool: str, categories) -> None:
         """Raise PolicyError if the labels given where the tool is wrapped contradict themselves
         or contradict what the policy says about the same tool."""
+        categories = call_site_list(categories, f"categories of tool '{tool}' at the call site")
         why = label_conflict(tool, categories)
         if why:
             raise PolicyError(f"{why} (at the call site)")
-        mine = set(categories or ())
+        mine = set(categories)
         for where, cfg in self._sections({"default": self.default, "agents": self.agents}):
             theirs = set((cfg.get("tool_categories") or {}).get(tool) or ())
             why = label_conflict(tool, mine | theirs)

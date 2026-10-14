@@ -49,7 +49,7 @@ from typing import Any, Callable, Iterable, Optional
 
 RESULT_MARKER = "@@auditrail-result@@"  # must match _isolate_worker.RESULT_MARKER (not imported: see runpy)
 from .ledger import Ledger
-from .policy import Decision, PolicyEngine, SessionState, UnclassifiedToolWarning
+from .policy import Decision, PolicyEngine, SessionState, UnclassifiedToolWarning, call_site_list
 
 # Variables a Python subprocess needs to start and behave normally. Nothing else
 # is inherited unless named in env_passthrough.
@@ -288,7 +288,7 @@ class Guard:
         loop that should see a structured refusal rather than a stack trace.
         env_passthrough: extra environment variable names an isolated tool may see.
         """
-        categories = list(categories)
+        categories = call_site_list(categories, f"categories of tool '{name}' at the call site")
         env_passthrough = tuple(env_passthrough)
         self.policy.check_call_site_labels(name, categories)  # PolicyError now, not a surprise at call time
         self.tools.add(name)
