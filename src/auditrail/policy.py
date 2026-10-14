@@ -39,8 +39,10 @@ give write actions a rule to be subject to; see SECURITY.md for what remains.
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
@@ -54,6 +56,31 @@ TRIFECTA = {"data_access", "untrusted_input", "external_comm"}
 STATE_CHANGE = "state_change"
 UNTRUSTED = "untrusted_input"
 INTERNAL = "internal"  # "touches none of the risk categories"; exclusive of every other label
+AGENT_TO_AGENT = "agent_to_agent"  # documented in policies/example_policy.yaml; no engine rule depends on it
+#: Every category name the engine knows without a declaration. Anything else must be declared under the
+#: policy's top-level `custom_categories`, so a typo or a different spelling is an error, not a new category.
+BUILTIN_CATEGORIES = frozenset(TRIFECTA | {STATE_CHANGE, INTERNAL, AGENT_TO_AGENT})
+_CANONICAL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def suggest_category(name: str, known) -> Optional[str]:
+    """The known name `name` was most likely meant to be: the same name once case, surrounding
+    whitespace and '-'/space separators are normalised, else the closest by edit similarity."""
+    if not isinstance(name, str):
+        return None
+    normalised = re.sub(r"[\s\-]+", "_", name.strip().lower())
+    if normalised in known:
+        return normalised
+    close = difflib.get_close_matches(normalised, sorted(known), n=1, cutoff=0.75)
+    return close[0] if close else None
+
+
+def unknown_category_message(name: str, known, subject: str) -> str:
+    hint = suggest_category(name, known)
+    text = f"unknown category {name!r} for {subject}"
+    text += f"; did you mean {hint!r}?" if hint else "."
+    return (f"{text} Known: {sorted(known)}. A category of your own must be declared once, in the policy's "
+            "top-level 'custom_categories' list, in the form lower_snake_case.")
 
 
 def string_list(value, what: str) -> list:
@@ -127,6 +154,9 @@ class PolicyEngine:
             raise PolicyError("policy is missing required 'version' field")
         self._validate_structure(config)
         self._validate_options(config)
+        #: built-in names plus the ones the policy declares under `custom_categories`
+        self.known_categories: frozenset = self._declared_categories(config)
+        self._validate_names(config, self.known_categories)
         self._validate_labels(config)
         from_config = bool(config.get("strict_classification", False))
         #: whether a tool with no declared category is refused (see module docstring)
@@ -189,6 +219,26 @@ class PolicyEngine:
                 raise PolicyError("'state_change_allowed_tools' must be a list of tool names")
 
     @staticmethod
+    def _declared_categories(config: dict) -> frozenset:
+        declared = string_list(config.get("custom_categories", []), "'custom_categories'")
+        for name in declared:
+            if name in BUILTIN_CATEGORIES:
+                raise PolicyError(f"'custom_categories' lists {name!r}, which is already built in; remove it")
+            if not _CANONICAL_NAME.match(name):
+                raise PolicyError(
+                    f"'custom_categories' entry {name!r} is not in the canonical form: lower_snake_case "
+                    "(a-z, 0-9 and '_', starting with a letter, at most 64 characters)")
+        return frozenset(BUILTIN_CATEGORIES | set(declared))
+
+    @classmethod
+    def _validate_names(cls, config: dict, known) -> None:
+        for where, cfg in cls._sections(config):
+            for tool, cats in (cfg.get("tool_categories") or {}).items():
+                for name in cats:
+                    if name not in known:
+                        raise PolicyError(unknown_category_message(name, known, f"tool '{tool}' in {where}"))
+
+    @staticmethod
     def _sections(config: dict) -> list:
         return [("default", config.get("default") or {}),
                 *((f"agent '{name}'", cfg or {}) for name, cfg in (config.get("agents") or {}).items())]
@@ -206,6 +256,17 @@ class PolicyEngine:
         """Raise PolicyError if the labels given where the tool is wrapped contradict themselves
         or contradict what the policy says about the same tool."""
         categories = call_site_list(categories, f"categories of tool '{tool}' at the call site")
+        for name in categories:
+            if name not in self.known_categories:
+                raise PolicyError(unknown_category_message(name, self.known_categories,
+                                                           f"tool '{tool}' at the call site"))
+        labelled = {where: frozenset(cfg["tool_categories"][tool])
+                    for where, cfg in self._sections({"default": self.default, "agents": self.agents})
+                    if isinstance(cfg.get("tool_categories"), dict) and tool in cfg["tool_categories"]}
+        if len(set(labelled.values())) > 1:
+            shown = "; ".join(f"{w}: {sorted(c)}" for w, c in labelled.items())
+            raise PolicyError(f"tool '{tool}' is labelled differently in different sections ({shown}). It is one "
+                              "function, so it needs one label set; make the sections agree.")
         why = label_conflict(tool, categories)
         if why:
             raise PolicyError(f"{why} (at the call site)")
