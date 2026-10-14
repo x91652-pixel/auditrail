@@ -326,7 +326,7 @@ fn check_anchor_line(rec: &Map<String, Value>, keys: &Option<HashMap<String, [u8
                     if !SUPPORTED_ALGS.contains(&alg) {
                         return Err((
                             "UNSUPPORTED_ALGORITHM".into(),
-                            format!("anchor is signed with algorithm '{alg}', which this verifier does not implement; its signature was not checked (this is not evidence of tampering)"),
+                            format!("anchor names signature algorithm '{alg}', which this verifier does not implement, so its signature could not be checked. That may be a newer algorithm, or someone may have changed the field. Inconclusive, not OK; it can be provoked by someone without the key"),
                         ));
                     }
                     if !check_sig(p, TAG_ANCHOR, &anchor_hash, s(rec, "sig").unwrap_or("")) {
@@ -372,11 +372,33 @@ fn anchor_lines(bytes: &[u8]) -> (Vec<Map<String, Value>>, Option<String>) {
 }
 
 /// The owner's anchors file: every line valid and chained first (spec check 3), then compared to the ledger.
-fn check_anchors_file(bytes: &[u8], ledger: &[Map<String, Value>], keys: &Option<HashMap<String, [u8; 32]>>) -> Result<Option<i64>, Report> {
+fn note_unchecked_alg(a: &Map<String, Value>, unchecked: &mut Vec<String>) {
+    if let Some(alg) = s(a, "sig_alg") {
+        if !SUPPORTED_ALGS.contains(&alg) && !unchecked.iter().any(|u| u == alg) {
+            unchecked.push(alg.to_string());
+        }
+    }
+}
+
+fn check_anchors_file(
+    bytes: &[u8],
+    ledger: &[Map<String, Value>],
+    keys: &Option<HashMap<String, [u8; 32]>>,
+    deferred: &mut Option<Report>,
+    unchecked: &mut Vec<String>,
+) -> Result<Option<i64>, Report> {
     let (lines, problem) = anchor_lines(bytes);
     let mut prev = GENESIS.to_string();
     for (i, a) in lines.iter().enumerate() {
-        check_anchor_line(a, keys).map_err(|(st, d)| Report::fail(&st, format!("anchors file: line {}: {d}", i + 1), None))?;
+        match check_anchor_line(a, keys) {
+            Ok(()) => {}
+            Err((st, d)) if st == "UNSUPPORTED_ALGORITHM" => {
+                // inconclusive: remembered, and the line is still compared with the ledger below
+                deferred.get_or_insert_with(|| Report::fail(&st, format!("anchors file: line {}: {d}", i + 1), None));
+            }
+            Err((st, d)) => return Err(Report::fail(&st, format!("anchors file: line {}: {d}", i + 1), None)),
+        }
+        note_unchecked_alg(a, unchecked);
         if s(a, "prev_anchor") != Some(prev.as_str()) {
             return Err(Report::fail("TAMPERED_ANCHOR", format!("anchors file: line {}: prev_anchor does not link to the previous anchor", i + 1), None));
         }
@@ -394,11 +416,24 @@ fn check_anchors_file(bytes: &[u8], ledger: &[Map<String, Value>], keys: &Option
 }
 
 /// A witness's copy: each line is validated and compared to the ledger in turn.
-fn check_witness(bytes: &[u8], ledger: &[Map<String, Value>], keys: &Option<HashMap<String, [u8; 32]>>) -> Result<Option<i64>, Report> {
+fn check_witness(
+    bytes: &[u8],
+    ledger: &[Map<String, Value>],
+    keys: &Option<HashMap<String, [u8; 32]>>,
+    deferred: &mut Option<Report>,
+    unchecked: &mut Vec<String>,
+) -> Result<Option<i64>, Report> {
     let (lines, problem) = anchor_lines(bytes);
     let mut upto = None;
     for (i, a) in lines.iter().enumerate() {
-        check_anchor_line(a, keys).map_err(|(st, d)| Report::fail(&st, format!("witness: line {}: {d}", i + 1), None))?;
+        match check_anchor_line(a, keys) {
+            Ok(()) => {}
+            Err((st, d)) if st == "UNSUPPORTED_ALGORITHM" => {
+                deferred.get_or_insert_with(|| Report::fail(&st, format!("witness: line {}: {d}", i + 1), None));
+            }
+            Err((st, d)) => return Err(Report::fail(&st, format!("witness: line {}: {d}", i + 1), None)),
+        }
+        note_unchecked_alg(a, unchecked);
         let seq = compare_to_ledger(a, ledger, "witness")?;
         upto = Some(upto.map_or(seq, |u: i64| u.max(seq)));
     }
@@ -418,7 +453,11 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         Err(rep) => return rep,
     };
 
-    // 1 + 2: chain, signatures, field rules, record by record
+    // 1 + 2: chain, signatures, field rules, record by record.
+    // UNSUPPORTED_* are inconclusive and can be provoked by anyone who can rewrite the file, so the first one is
+    // remembered and every other check still runs; it is returned only if nothing definite was found.
+    let mut deferred: Option<Report> = None;
+    let mut anchor_algs: Vec<String> = Vec::new();
     let mut prev = GENESIS.to_string();
     for (i, rec) in records.iter().enumerate() {
         let bad = |st: &str, d: String| Report::fail(st, d, Some(i as i64));
@@ -434,10 +473,15 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         }
         if rec.get("format").map_or(false, |_| is_int(rec.get("format"))) && rec["format"].as_i64() != Some(FORMAT_VERSION) {
             // after the hash held: a different format that still chains is declined, not misread
-            return bad(
-                "UNSUPPORTED_FORMAT",
-                format!("seq={i}: format {} is not understood by this verifier (it reads format {FORMAT_VERSION})", rec["format"]),
-            );
+            if deferred.is_none() {
+                deferred = Some(bad(
+                    "UNSUPPORTED_FORMAT",
+                    format!(
+                        "seq={i}: format {} is not understood by this verifier (it reads format {FORMAT_VERSION}); the records were not judged as that format. That may be a newer format, or someone may have changed the field. Inconclusive, not OK. It can be provoked by someone without the key, so it does not mean the records were not tampered with",
+                        rec["format"]
+                    ),
+                ));
+            }
         }
         if let Some(keys) = &opts.public_keys {
             let key_id = s(rec, "key_id").filter(|k| !k.is_empty());
@@ -453,12 +497,13 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
             }
             let alg = s(rec, "sig_alg").unwrap_or(DEFAULT_ALG);
             if !SUPPORTED_ALGS.contains(&alg) {
-                return bad(
-                    "UNSUPPORTED_ALGORITHM",
-                    format!("seq={i} is signed with algorithm '{alg}', which this verifier does not implement; its signature was not checked (this is not evidence of tampering)"),
-                );
-            }
-            if !check_sig(p, TAG_RECORD, &stored, sig) {
+                if deferred.is_none() {
+                    deferred = Some(bad(
+                        "UNSUPPORTED_ALGORITHM",
+                        format!("seq={i} names signature algorithm '{alg}', which this verifier does not implement, so its signature could not be checked. That may be a newer algorithm, or someone may have changed the field. Inconclusive, not OK. It can be provoked by someone without the key, so it does not mean the records were not tampered with"),
+                    ));
+                }
+            } else if !check_sig(p, TAG_RECORD, &stored, sig) {
                 return bad("BAD_SIGNATURE", format!("seq={i}: signature does not verify"));
             }
         }
@@ -478,7 +523,7 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
 
     // 3: the owner's anchors file, 4: the witness's copy
     if let Some(bytes) = &opts.anchors {
-        match check_anchors_file(bytes, &records, &opts.public_keys) {
+        match check_anchors_file(bytes, &records, &opts.public_keys, &mut deferred, &mut anchor_algs) {
             Ok(u) => fold(u),
             Err(mut r) => {
                 r.records = n;
@@ -487,7 +532,7 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         }
     }
     if let Some(bytes) = &opts.witness {
-        match check_witness(bytes, &records, &opts.public_keys) {
+        match check_witness(bytes, &records, &opts.public_keys, &mut deferred, &mut anchor_algs) {
             Ok(u) => fold(u),
             Err(mut r) => {
                 r.records = n;
@@ -543,8 +588,17 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         .filter(|a| !SUPPORTED_ALGS.contains(a))
         .map(String::from)
         .collect();
+    unchecked.extend(anchor_algs);
     unchecked.sort();
     unchecked.dedup();
+    if let Some(mut d) = deferred {
+        // nothing definite was found: say what could not be judged, and how much was covered
+        d.records = n;
+        d.anchored_upto = upto;
+        d.unanchored_tail = Some(tail);
+        d.unchecked_algorithms = unchecked;
+        return d;
+    }
     Report {
         status: "OK".into(),
         detail: format!("{n} record(s), chain intact"),
