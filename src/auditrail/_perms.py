@@ -36,16 +36,38 @@ _BROAD_SIDS = {
     "S-1-5-7": "Anonymous",
 }
 
+# No cmdlets that live in an autoloaded module (Get-Acl, Test-Path, ...): on a runner where pytest is started
+# from PowerShell 7, Windows PowerShell 5.1 inherited PS7's module path and failed with "The 'Get-Acl' command
+# was found in the module 'Microsoft.PowerShell.Security', but the module could not be loaded". Plain .NET calls
+# cannot hit that. The output format is unchanged: one `SID|Allow-or-Deny|rights` line per entry.
 _PS_SCRIPT = (
     "$ErrorActionPreference = 'Stop'; "
     "try { "
-    "$p = $env:AUDITRAIL_CHECK_PATH; "
-    "(Get-Acl -LiteralPath $p).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | "
+    "$p = [Environment]::GetEnvironmentVariable('AUDITRAIL_CHECK_PATH'); "
+    "if ([System.IO.Directory]::Exists($p)) { $sec = [System.IO.Directory]::GetAccessControl($p) } "
+    "else { $sec = [System.IO.File]::GetAccessControl($p) }; "
+    "$sec.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | "
     "ForEach-Object { $_.IdentityReference.Value + '|' + $_.AccessControlType + '|' + [int64]$_.FileSystemRights } "
     "} catch { "
     "[Console]::Error.WriteLine($_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 1 "
     "}"
 )
+
+
+def powershell_executable() -> str:
+    """Windows PowerShell 5.1 by its system path, so a different `powershell` earlier on PATH is not used;
+    falls back to the bare name if the system file is not where it should be."""
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+    candidate = os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return candidate if os.path.isfile(candidate) else "powershell"
+
+
+def powershell_environment(path: str) -> dict:
+    """The environment for the child: ours, without PSModulePath (so 5.1 computes its own default instead of
+    inheriting PowerShell 7's module path), plus the path to check."""
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+    env["AUDITRAIL_CHECK_PATH"] = path
+    return env
 
 
 def clean_stderr(text, limit: int = 300) -> str:
@@ -154,8 +176,8 @@ def permission_findings(path: Union[str, os.PathLike], role: str) -> list[Findin
         return [Finding("loose", f"{p}: {m}") for m in posix_findings(p.stat().st_mode, role)]
     try:
         out = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
-            env={**os.environ, "AUDITRAIL_CHECK_PATH": str(p)},
+            [powershell_executable(), "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
+            env=powershell_environment(str(p)),
             capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as exc:
