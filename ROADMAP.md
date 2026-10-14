@@ -11,7 +11,7 @@ What is left is mostly about *where the trust lives* and *what the evidence cove
 - `auditrail recorder` / `RemoteLedger`: the key and ledger live in a separate process.
 - Heartbeats (wrapped tools, policy hash, intercepted-vs-recorded counts) and gap checks.
 - Anchors to a git or file witness; verification from a witness copy alone.
-- Independent Rust verifier and a public format spec with thirteen conformance vectors.
+- Independent Rust verifier and a public format spec with fifteen conformance vectors.
 - Trifecta tracking per workflow, and signed messages that carry categories.
 - Per-agent keys, receipts, and `reconcile` for two-sided cross-checking.
 - Isolation environment is an allow-list; tool output cannot corrupt or forge a result.
