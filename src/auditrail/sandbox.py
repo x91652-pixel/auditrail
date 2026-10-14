@@ -290,6 +290,7 @@ class Guard:
         """
         categories = list(categories)
         env_passthrough = tuple(env_passthrough)
+        self.policy.check_call_site_labels(name, categories)  # PolicyError now, not a surprise at call time
         self.tools.add(name)
         if not categories and not self.policy.strict and not self.policy.classified_by_policy(name):
             warnings.warn(

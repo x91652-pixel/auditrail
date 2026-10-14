@@ -53,6 +53,22 @@ except ImportError:  # pragma: no cover - yaml is a declared dependency
 TRIFECTA = {"data_access", "untrusted_input", "external_comm"}
 STATE_CHANGE = "state_change"
 UNTRUSTED = "untrusted_input"
+INTERNAL = "internal"  # "touches none of the risk categories"; exclusive of every other label
+
+
+def label_conflict(tool: str, categories) -> Optional[str]:
+    """Why `categories` is contradictory for `tool`, or None.
+
+    `internal` is the explicit statement that a tool touches no risk category, so
+    pairing it with any other label is a contradiction -- left alone it would be a way
+    to dodge the state_change and trifecta rules while looking classified.
+    """
+    cats = set(categories or ())
+    others = sorted(cats - {INTERNAL})
+    if INTERNAL in cats and others:
+        return (f"tool '{tool}' is labelled 'internal' and also {others}: 'internal' means it touches none of the "
+                "risk categories, so it cannot carry another label. Remove one of them.")
+    return None
 
 
 class UnclassifiedToolWarning(UserWarning):
@@ -86,6 +102,7 @@ class PolicyEngine:
         if "version" not in config:
             raise PolicyError("policy is missing required 'version' field")
         self._validate_options(config)
+        self._validate_labels(config)
         from_config = bool(config.get("strict_classification", False))
         #: whether a tool with no declared category is refused (see module docstring)
         self.strict: bool = from_config if strict is None else bool(strict)
@@ -120,6 +137,33 @@ class PolicyEngine:
             allowed = cfg.get("state_change_allowed_tools", [])
             if not isinstance(allowed, list) or not all(isinstance(t, str) for t in allowed):
                 raise PolicyError("'state_change_allowed_tools' must be a list of tool names")
+
+    @staticmethod
+    def _sections(config: dict) -> list:
+        return [("default", config.get("default") or {}),
+                *((f"agent '{name}'", cfg or {}) for name, cfg in (config.get("agents") or {}).items())]
+
+    @classmethod
+    def _validate_labels(cls, config: dict) -> None:
+        for where, cfg in cls._sections(config):
+            for tool, cats in (cfg.get("tool_categories") or {}).items():
+                if isinstance(cats, list):
+                    why = label_conflict(tool, cats)
+                    if why:
+                        raise PolicyError(f"{why} (in {where})")
+
+    def check_call_site_labels(self, tool: str, categories) -> None:
+        """Raise PolicyError if the labels given where the tool is wrapped contradict themselves
+        or contradict what the policy says about the same tool."""
+        why = label_conflict(tool, categories)
+        if why:
+            raise PolicyError(f"{why} (at the call site)")
+        mine = set(categories or ())
+        for where, cfg in self._sections({"default": self.default, "agents": self.agents}):
+            theirs = set((cfg.get("tool_categories") or {}).get(tool) or ())
+            why = label_conflict(tool, mine | theirs)
+            if why:
+                raise PolicyError(f"{why} (call site says {sorted(mine)}, {where} says {sorted(theirs)})")
 
     def classified_by_policy(self, tool: str) -> bool:
         """True if any agent (or the default) gives `tool` at least one category in the policy."""
@@ -157,6 +201,10 @@ class PolicyEngine:
         categories = set(cfg.get("tool_categories", {}).get(tool, []))
         if extra_categories:
             categories |= set(extra_categories)
+
+        why = label_conflict(tool, categories)
+        if why:
+            return Decision(allow=False, reason=f"label_conflict: {why}")
 
         if self.strict and not categories:
             return Decision(
