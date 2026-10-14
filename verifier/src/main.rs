@@ -24,6 +24,19 @@ fn read(path: &str) -> Result<Vec<u8>, ExitCode> {
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(ledger_path) = args.next() else { return usage() };
+    if ledger_path == "--version" || ledger_path == "-V" {
+        println!("auditrail-verify {} (evidence format v2)", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    if ledger_path == "--help" || ledger_path == "-h" {
+        println!(
+            "auditrail-verify {}: offline verifier for auditrail evidence ledgers (format v2)\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        println!("usage: auditrail-verify LEDGER [--pubkey FILE]... [--anchors FILE] [--witness FILE] [--max-gap SECONDS] [--json]\n");
+        println!("exit code: 0 all requested checks pass, 1 a check failed, 2 a file could not be read");
+        return ExitCode::SUCCESS;
+    }
     if ledger_path.starts_with("--") {
         return usage();
     }
