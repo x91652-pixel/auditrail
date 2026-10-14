@@ -60,7 +60,7 @@ AGENT_TO_AGENT = "agent_to_agent"  # documented in policies/example_policy.yaml;
 #: Every category name the engine knows without a declaration. Anything else must be declared under the
 #: policy's top-level `custom_categories`, so a typo or a different spelling is an error, not a new category.
 BUILTIN_CATEGORIES = frozenset(TRIFECTA | {STATE_CHANGE, INTERNAL, AGENT_TO_AGENT})
-_CANONICAL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_CANONICAL_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")  # always used with fullmatch: `$` would accept a trailing newline
 
 
 def suggest_category(name: str, known) -> Optional[str]:
@@ -224,7 +224,7 @@ class PolicyEngine:
         for name in declared:
             if name in BUILTIN_CATEGORIES:
                 raise PolicyError(f"'custom_categories' lists {name!r}, which is already built in; remove it")
-            if not _CANONICAL_NAME.match(name):
+            if _CANONICAL_NAME.fullmatch(name) is None:
                 raise PolicyError(
                     f"'custom_categories' entry {name!r} is not in the canonical form: lower_snake_case "
                     "(a-z, 0-9 and '_', starting with a letter, at most 64 characters)")
