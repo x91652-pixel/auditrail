@@ -5,8 +5,8 @@
 **這份文件只做一件事：把 README / SECURITY / ROADMAP 的每一項主張對照到實際程式碼與測試。**
 沒有改任何程式行為；同一次變更中只有文件被修改（見第 7 節）。
 
-> 範圍說明：基線已含 PR #2（完整政策 hash 綁進每筆呼叫紀錄、`LEGACY_FORMAT`、`--legacy-v01`）與 PR #3（發布流程）。
-> 不含 `phase-1-secure-defaults` 的任何內容（strict 模式、`state_change`、`SqliteReplayGuard`…）。
+> 範圍說明：第 1–3.5 節與 3.6 之後的盤點基線是 `origin/main`（已含 PR #2 與 PR #3）。第 3.5b 節與下方 H3/H4/H5/V9/V10 列反映的是 `hardening-fixes` 分支（`phase-1-secure-defaults` + `test-gaps-d7` 之上）的狀態，**這些變更尚未合併進 main**。
+> 第 1 節測試數字是 `origin/main` 上的；`hardening-fixes` 上的數字見第 1b 節。
 
 狀態圖例：
 
@@ -34,6 +34,16 @@
 **注意（PR #2 新增的測試）：** `test_policy_hash.py` 裡有兩個測試只在找得到 Rust 執行檔時才會呼叫它（`if BINARY is not None:`），**找不到時不是跳過，而是只跑 Python 那一半並算「通過」**。所以沒有執行檔時的「247 通過」包含這兩個只驗了一半的測試；只有 `-rs` 看得到的 6 個才是被標記跳過的。
 
 CI（GitHub Actions）在 PR #1 / #2 / #3 合併前全部成功；`verifier` job 會先建置 Rust 執行檔，因此 CI 上不會有跳過。
+
+### 1b. `hardening-fixes` 分支上的測試數字（2026-10-14，Windows 11、Python 3.11、有 Rust 執行檔）
+
+| 指令 | 結果 |
+|---|---|
+| `pytest -q -rs` | **358 通過、0 失敗、1 跳過**（`tests\test_phase1_defaults.py:357`：POSIX mode bits，只在 POSIX 執行）；共收集 359 個 |
+| `cd verifier && cargo test --locked --release` | robust 2 通過、vectors 2 通過 |
+
+沒有 Rust 執行檔時，`test_policy_hash.py` 的 9 個 Rust 對照測試會**明確 skip**（`pytest.skip`），不再算通過。Linux 與 Python 3.10 從未在本機執行。
+
 
 ## 2. 被跳過的測試
 
@@ -71,7 +81,7 @@ CI（GitHub Actions）在 PR #1 / #2 / #3 合併前全部成功；`verifier` job
 | X1 | 每筆呼叫紀錄都帶完整政策 SHA-256（`policy_hash`） | PR #2 描述、規格 | `ledger.py` `CALL_FIELDS` / `call_fields`；`sandbox.py` `common`；`policy.py` `policy_hash` | `test_policy_hash.py::test_every_decision_carries_the_policy_hash`、`::test_recorder_path_keeps_the_hash` | ✅ | |
 | X2 | 版本字串沒變但規則變了，證據看得出來 | PR #2 描述 | 同上 | `::test_same_version_string_but_changed_rules_is_visible_in_the_evidence`、`::test_the_hash_is_a_function_of_the_rules_not_of_key_order_or_whitespace` | ✅ | |
 | X3 | 寫入端拒絕不是 64 位小寫十六進位（或 null）的值 | 規格 | `ledger.py` `call_fields` | `::test_the_writer_refuses_a_value_that_is_not_a_hash`（9 個參數） | ✅ | |
-| X4 | 兩個驗證器都拒絕偽造的非 hash 值（即使 hash 與簽章都對） | 規格 | `verifier.py` `_check_fields`；`lib.rs` | `::test_both_verifiers_reject_a_forged_non_hash_even_when_it_is_correctly_hashed`（7 個參數）；向量 14 | 🟡 | Rust 那一半在沒有執行檔時**不會跳過也不會執行**（見第 1 節注意事項） |
+| X4 | 兩個驗證器都拒絕偽造的非 hash 值（即使 hash 與簽章都對） | 規格 | `verifier.py` `_check_fields`；`lib.rs` | `::test_both_verifiers_reject_a_forged_non_hash_even_when_it_is_correctly_hashed`（8 個參數）；向量 14 | 🟡 | Rust 那一半在沒有執行檔時**不會跳過也不會執行**（見第 1 節注意事項） |
 | X5 | 真正的 v0.1 帳本得到 `LEGACY_FORMAT`，不是 `TAMPERED_LEDGER` | PR #2、SECURITY | `verifier.py:40`；`lib.rs:149`；`_strict.py` `is_legacy_text` | `::test_a_genuine_v01_ledger_is_not_called_tampered`；向量 15；夾具 `tests/fixtures/legacy_v01_ledger.jsonl`（由 v0.1 程式碼 `e37a7ed` 實際產生） | 🟡 | Rust 同上；夾具是真的，但只有 1 份、3 筆 |
 | X6 | `auditrail verify --legacy-v01` 只檢查舊雜湊鏈並說明有多弱 | PR #2 | `cli.py:31,187`；`verifier.py` `verify_legacy_v01` | `::test_legacy_option_checks_the_old_hash_chain_and_says_how_weak_that_is`、`::test_cli_legacy_flag` | ✅ | **只有 Python**；Rust 驗證器沒有這個旗標（README/SECURITY 已寫明） |
 | X7 | 沒有政策時，記錄者心跳寫 `policy_hash: null`（不是 `""`） | PR #2 | `recorder.py` | `test_policy_hash.py::test_recorder_path_keeps_the_hash`（第 87 行斷言 `beat["policy_hash"] is None`） | 🟡 | 測的是 `RecorderService` 類別；CLI 的 `serve()` 路徑沒有測 |
@@ -82,9 +92,9 @@ CI（GitHub Actions）在 PR #1 / #2 / #3 合併前全部成功；`verifier` job
 |---|---|---|---|---|---|---|
 | H1 | 心跳列出包裝的工具、政策 hash、攔截 vs 已記錄呼叫數 | README、SECURITY 表 4 | `sandbox.py` `Guard.heartbeat`；`ledger.py` `record_heartbeat`；`verifier.py` `check_heartbeats` | `test_signed_evidence.py::test_tool_and_policy_changes_are_listed`、`::test_calls_intercepted_but_not_recorded_are_flagged`；`test_v2_agents.py::test_guard_heartbeat_reports_intercepted_vs_recorded` | ✅ | |
 | H2 | 心跳空窗（`--max-gap`）會被回報；完全沒有心跳也算失敗 | README、SECURITY | `verifier.py` `check_heartbeats` | `test_signed_evidence.py::test_heartbeat_gap_is_reported`、`::test_no_heartbeat_at_all_fails_when_a_gap_limit_is_set` | ✅ | |
-| H3 | 背景定期心跳（`Guard.start_heartbeats`） | README 程式碼範例 | `sandbox.py` `start_heartbeats` / `stop_heartbeats` | 沒有測試呼叫 `start_heartbeats` | ⚠️ | 只有單次 `heartbeat()` 被測；背景執行緒、`stop_heartbeats(final=True)` 都沒測 |
-| H4 | 記錄者服務定期寫心跳與錨點 | README | `recorder.py` `RecorderService._loop`、`heartbeat`、`anchor` | `test_v2_agents.py` 全部以 `heartbeat_s=0` 建立服務 | ⚠️ | 週期迴圈本身沒被測；`anchor()` 方法也沒有在測試中被呼叫 |
-| H5 | 記錄者是獨立行程，金鑰與帳本只在那邊，代理只能附加 | README、SECURITY | `recorder.py` `RecorderService`、`RemoteLedger`、`serve`；`cli.py recorder` | `test_v2_agents.py::test_recorder_holds_the_key_and_agent_side_can_only_append`、`::test_recorder_rejects_requests_without_the_token_and_non_append_ops`、`::test_guarded_call_fails_loudly_when_the_recorder_is_down`、`::test_recorder_refuses_non_loopback_addresses` | 🟡 | 測試把服務放在**同一個測試行程的執行緒**裡，沒有真的以獨立 OS 行程啟動 `auditrail recorder`；`serve()`、SIGTERM 處理、預設週期錨定都沒測 |
+| H3 | 背景定期心跳（`Guard.start_heartbeats` / `stop_heartbeats`） | README 程式碼範例 | `sandbox.py` `start_heartbeats` / `stop_heartbeats` | `test_gaps_d7.py::test_h3_background_heartbeats_keep_arriving_and_the_final_one_is_written_on_stop`、`::test_h3_stop_without_final_writes_nothing_and_stops_the_thread`、`::test_h3_starting_twice_does_not_start_a_second_thread`、`::test_h3_can_be_restarted_after_a_stop`、`::test_h3_the_heartbeats_describe_the_wrapped_tools_and_the_ledger_verifies` | ✅ | T-009 補上；間隔 0.05 秒、有上限的輪詢。只在 Windows 實跑 |
+| H4 | 記錄者服務定期寫心跳與錨點 | README | `recorder.py` `RecorderService._loop`、`heartbeat`、`anchor` | `test_gaps_d7.py::test_h4_the_loop_calls_its_function_at_the_interval_until_stopped`、`::test_h4_a_failing_beat_does_not_kill_the_loop`、`::test_h4_start_wires_the_heartbeat_loop_and_stop_writes_a_final_beat`、`::test_h4_anchor_writes_a_signed_anchor_that_verify_accepts_and_chains`、`::test_h4_the_periodic_anchor_loop_produces_a_verifiable_anchor` | ✅ | T-009 補上。`serve()` 預設的 300 秒錨定間隔本身沒測（測的是 `anchor_s=1`） |
+| H5 | 記錄者是獨立行程，金鑰與帳本只在那邊，代理只能附加；收到停止訊號會寫最後心跳與錨點 | README、SECURITY | `recorder.py` `RecorderService`、`RemoteLedger`、`serve`；`cli.py recorder` | `test_gaps_d7.py::test_h5_a_separate_os_process_records_what_an_agent_appends`（真的子行程）、`::test_h5_the_stop_signal_makes_it_exit_cleanly_with_a_final_heartbeat_and_anchor`、`::test_h5_a_wrong_token_is_refused_by_the_separate_process`；類別層級另有 `test_v2_agents.py::test_recorder_holds_the_key_and_agent_side_can_only_append` 等 | ✅（Windows）／🟡（POSIX） | **停止訊號路徑在 POSIX（SIGTERM）從未實際執行過**，只在 Windows（CTRL_BREAK）驗證；Windows 上它曾因 `time.sleep(3600)` 收不到 SIGBREAK 而失敗，已於 `fbb77b3` 修正（改 0.5 秒短睡） |
 | H6 | 記錄者拒絕沒有 token 的請求與非附加操作 | SECURITY | `recorder.py` `_handle` | `test_v2_agents.py::test_recorder_rejects_requests_without_the_token_and_non_append_ops` | ✅ | |
 | H7 | 記錄者只綁 loopback | SECURITY | `recorder.py` `RecorderService.__init__` | `test_v2_agents.py::test_recorder_refuses_non_loopback_addresses` | ✅ | |
 
@@ -138,11 +148,30 @@ README「Anchoring」寫的是 7 種結果。實際 Python `verify`（含錨點�
 | V6 | 預先建置的驗證器執行檔 + SHA256SUMS + 出處證明 | README | `.github/workflows/release.yml` | 無（從未在 GitHub 上跑過） | ⚠️ | README 已寫明「尚未發布」；workflow 已隨 PR #3 合併進 main，但**從未在 GitHub 上執行過**（`gh run list --workflow release.yml` 無紀錄）；也沒有任何 tag 或 Release |
 | V7 | 兩次乾淨建置位元組相同 | README | `release.yml` 的建置旗標 | 本機驗證過一次（同一台機器） | 🟡 | 跨機器相同**未驗證**，README 已如實寫明 |
 | V8 | 公開格式規格 `docs/spec/evidence-format-v2.md` | README | 規格 + 向量 | `test_vectors.py` | ✅ | |
-| V9 | `auditrail keygen` / `anchor --key` / `verify --pubkey --anchors --git-repo --witness-file --max-gap --json` | README | `cli.py` | `test_cli_v2.py::test_keygen_then_signed_anchor_then_verify_with_witness`；`test_anchor.py::test_cli_json_output_for_verify_and_anchor` | ✅ | |
-| V10 | `anchor --push` 才會推送見證庫 | README、SECURITY | `anchor.py` `GitSink.push`；`cli.py` | `test_anchor.py::test_push_is_not_called_unless_requested` | 🟡 | 只測「沒要求就不推」；**真的 push 到遠端沒有測試** |
+| V9 | `auditrail keygen` / `anchor --key` / `verify --pubkey --anchors --git-repo --witness-file --max-gap --json` | README | `cli.py` | `test_cli_v2.py::test_keygen_then_signed_anchor_then_verify_with_witness`（含 `--pubkey --witness-file --max-gap --json`）；`test_anchor.py::test_cli_json_output_for_verify_and_anchor`（`--anchors --json`）；`test_gaps_d7.py::test_v10_*`（`anchor --git-repo --key --push`） | 🟡 | **`verify --git-repo`（CLI）沒有任何測試**；git 見證只經由 Python API（`GitSink`）被測 |
+| V10 | `anchor --push` 才會推送見證庫，且真的推送 | README、SECURITY | `anchor.py` `GitSink.push`；`cli.py` | `test_gaps_d7.py::test_v10_push_really_reaches_the_remote_and_the_remote_copy_verifies`（本機 bare repo；驗遠端檔案內容與 clone 後的 witness 驗證）、`::test_v10_a_later_anchor_is_pushed_too`、`::test_v10_without_push_the_remote_stays_empty`、`::test_v10_a_push_that_cannot_reach_its_remote_is_reported_not_swallowed`；`test_anchor.py::test_push_is_not_called_unless_requested` | ✅ | 只用本機 bare repo，沒有網路；沒有 git 時 skip。Linux 未實跑 |
 | V11 | `GitSink` 發布失敗時不留本地錨點 | 程式碼 | `anchor.py` | `test_anchor.py::test_git_publish_failure_records_no_local_anchor` | ✅ | |
 | V12 | 內建 demo、`lint` 可離線執行 | README | `_demo.py`、`cli.py` | `test_demo.py`、`test_self_contained_demo.py`、`test_cli.py::test_lint_ok` | ✅ | 本次手動重跑：`auditrail verify` 對 demo 帳本回 OK、竄改版回 TAMPER、`lint` 回 OK |
 | V13 | Dashboard（Rust） | README（只提到 `cargo test`） | `dashboard/` | 3 個單元測試 | 🟡 | README 沒有描述 dashboard 的功能；只有 3 個測試，沒有端對端測試 |
+
+### 3.5b phase-1 與之後新增的主張（分支 `phase-1-secure-defaults` → `test-gaps-d7` → `hardening-fixes`）
+
+這一節的列**不在 origin/main**；它們屬於尚未合併的分支。`✅` 的條件是：有具名測試，且該測試真的斷言了該主張。
+
+| # | 主張 | 程式碼 | 測試 | 狀態 | 備註 |
+|---|---|---|---|---|---|
+| S1 | strict 模式拒絕沒有任何類別的工具，帳本記錄 `unclassified_tool` | `policy.py` `check` | `test_phase1_defaults.py::test_strict_refuses_an_unclassified_tool_and_records_why`；`test_t006_labels.py::test_d2_empty_list_in_strict_mode_is_refused_and_recorded_as_unclassified` | ✅ | 空清單 `[]` 不算宣告（D-2），同一測試鎖住 |
+| S2 | 非 strict 時行為不變，但包裝工具時發 `UnclassifiedToolWarning` | `sandbox.py` `guarded_tool` | `test_phase1_defaults.py::test_non_strict_keeps_the_old_behaviour_but_warns_at_wrap_time`、`::test_no_warning_when_the_tool_is_classified_or_strict` | ✅ | 警告只出現一次、在包裝時 |
+| S3 | `state_change` + `enforce_state_change_after_untrusted`：同一 workflow 讀過不可信內容後拒絕 | `policy.py` `check` | `test_phase1_defaults.py::test_state_change_after_untrusted_input_is_refused_when_enabled`、`::test_state_change_rule_follows_the_workflow_not_just_the_session`、`::test_explicitly_allowed_state_change_tool_passes`、`::test_default_policy_evaluates_state_change_exactly_as_before`；模擬 #17 | ✅ | 只對**被標成 `state_change`** 的工具有效；標錯不會被發現（模擬 #19） |
+| S4 | `SqliteReplayGuard`：多行程共享重放判斷，失敗時關閉 | `agent_bridge.py` | `test_phase1_defaults.py::test_two_processes_replaying_one_message_second_is_refused`、`::test_concurrent_processes_exactly_one_accepts`、`::test_sqlite_guard_fails_closed_when_the_store_is_unusable`、`::test_sqlite_guard_forgets_nonces_after_the_ttl` | ✅ | 只限同一台主機；Linux 未實跑 |
+| S5 | 記錄者 token 以固定長度摘要比較（常數時間原語），非 ASCII token 可用 | `recorder.py` `_token_matches` | `test_phase1_defaults.py::test_token_is_compared_with_a_constant_time_primitive`、`::test_token_with_non_ascii_characters_is_accepted_when_correct`、`::test_non_string_token_is_just_wrong` | 🟡 | 測的是「呼叫了 `hmac.compare_digest` 且參數是 bytes」，**不是時間側通道本身**；沒有計時測試 |
+| S6 | 記錄者在金鑰／帳本／錨點檔權限過寬時拒絕啟動（結束碼 2），`--allow-loose-permissions` 降為警告；檢查跑不起來時印 `NOT CHECKED` 且不阻擋 | `recorder.py` `serve`；`_perms.py` | `test_t006_recorder_permissions.py::test_d4_serve_refuses_to_start_with_a_loose_key`、`::test_d4_the_flag_downgrades_the_refusal_to_a_warning_and_the_recorder_runs`、`::test_d4_a_loose_ledger_is_refused_too`、`::test_d4_unchecked_is_reported_but_does_not_block_start`、`::test_d4_a_private_key_starts_normally_without_any_flag` | 🟡 | Windows 路徑用真的 `icacls` 驗證。**POSIX 的真實檔案測試（`test_posix_check_on_a_real_file`）在 Windows 上被跳過、從未實跑**；POSIX 只有純函式 `posix_findings` 被測。Windows 檢查只看 Everyone/Users/Authenticated Users/Guests/Anonymous |
+| S7 | `internal` 與任何其他類別並用 → 載入期 `PolicyError`；呼叫端標籤與政策矛盾 → `PolicyError`；`check()` 對繞過者回 `label_conflict` | `policy.py` `label_conflict`、`check_call_site_labels` | `test_t006_labels.py::test_d3_internal_plus_any_other_category_in_the_policy_is_refused_at_load`（5 個參數）、`::test_d3_conflict_at_the_call_site_is_refused_when_the_tool_is_wrapped`、`::test_d3_call_site_label_that_contradicts_the_policy_is_refused` | ✅ | 單獨標 `internal` 的工具不會被檢查（模擬 #19） |
+| S8 | 類別值必須是字串清單；`agents: {a: null}`、字串、None、數字、巢狀清單在載入期丟 `PolicyError`，含工具名與區段 | `policy.py` `_validate_structure`、`string_list`、`call_site_list` | `test_t010_policy_types.py::test_tool_category_values_must_be_a_list_of_strings`（9 個參數）、`::test_an_agent_section_that_is_null_or_not_a_mapping_is_refused_at_load`、`::test_call_site_categories_must_be_strings_in_a_list`（7 個參數） | ✅ | **沒有處理**類別名稱的大小寫、空白、拼字錯誤與未知類別（待 D-9） |
+| S9 | 記錄者沒有 token／token 為空字串時警告並仍啟動 | `recorder.py` `serve` | `test_t010_recorder_token.py`（4 個測試） | ✅ | 紅階段只對「空字串」分支做過破壞驗證 |
+| S10 | 在 Windows 上 `auditrail recorder` 可被 Ctrl+Break 停下並寫最後心跳與錨點 | `recorder.py` `serve` | `test_gaps_d7.py::test_h5_the_stop_signal_makes_it_exit_cleanly_with_a_final_heartbeat_and_anchor` | 🟡 | Windows ✅；**POSIX 的 SIGTERM 路徑未實跑**（程式碼同一條，但沒驗證） |
+| S11 | `.gitignore` 排除 `*.key` 與 `keys/` | `.gitignore` | 無測試（以 `git ls-files -i -c --exclude-standard` 為空檢查） | 🟡 | 不是行為，是設定；`keys/` 同時隱藏旁邊的 `.pub` |
+
 
 ### 3.6 SECURITY.md「does NOT do」清單
 
