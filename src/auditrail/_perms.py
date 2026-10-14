@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Union
+from typing import NamedTuple, Union
 
 # FileSystemRights bits
 _READ_DATA = 0x1 | 0x20  # ReadData, ExecuteFile
@@ -76,13 +77,31 @@ def windows_findings(acl_lines: list[str], role: str) -> list[str]:
     return found
 
 
-def permission_warnings(path: Union[str, os.PathLike], role: str) -> list[str]:
-    """Warnings for one file; an empty list means nothing suspicious was found (not "safe")."""
+@dataclass(frozen=True)
+class Finding:
+    """kind "loose": the file IS open to other accounts. kind "unchecked": the check could not run
+    (missing file, no PowerShell, ...) -- that is not a pass and must be reported as such."""
+
+    kind: str
+    message: str
+
+
+class Classified(NamedTuple):
+    loose: list
+    unchecked: list
+
+
+def classify_findings(*findings: Finding) -> Classified:
+    return Classified([f for f in findings if f.kind == "loose"], [f for f in findings if f.kind == "unchecked"])
+
+
+def permission_findings(path: Union[str, os.PathLike], role: str) -> list[Finding]:
+    """Findings for one file. An empty list means nothing suspicious was found (not "safe")."""
     p = Path(path)
     if not p.exists():
-        return [f"{p} does not exist, so its permissions could not be checked"]
+        return [Finding("unchecked", f"{p} does not exist, so its permissions are NOT CHECKED")]
     if os.name != "nt":
-        return [f"{p}: {m}" for m in posix_findings(p.stat().st_mode, role)]
+        return [Finding("loose", f"{p}: {m}") for m in posix_findings(p.stat().st_mode, role)]
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
@@ -90,7 +109,12 @@ def permission_warnings(path: Union[str, os.PathLike], role: str) -> list[str]:
             capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return [f"{p}: permissions could not be checked ({type(exc).__name__})"]
+        return [Finding("unchecked", f"{p}: permissions NOT CHECKED ({type(exc).__name__}; is PowerShell available?)")]
     if out.returncode != 0:
-        return [f"{p}: permissions could not be checked (PowerShell exited {out.returncode})"]
-    return [f"{p}: {m}" for m in windows_findings(out.stdout.splitlines(), role)]
+        return [Finding("unchecked", f"{p}: permissions NOT CHECKED (PowerShell exited {out.returncode})")]
+    return [Finding("loose", f"{p}: {m}") for m in windows_findings(out.stdout.splitlines(), role)]
+
+
+def permission_warnings(path: Union[str, os.PathLike], role: str) -> list[str]:
+    """The messages of permission_findings, for callers that only print."""
+    return [f.message for f in permission_findings(path, role)]

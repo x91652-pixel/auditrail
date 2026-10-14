@@ -217,6 +217,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_rec.add_argument("--git-repo", help="Git witness for anchors (never pushed automatically).")
     p_rec.add_argument("--token-env", default="AUDITRAIL_RECORDER_TOKEN",
                        help="Environment variable holding the shared token agents must present.")
+    p_rec.add_argument("--allow-loose-permissions", action="store_true",
+                       help="Start even if the key (or ledger/anchors) is open to other local accounts; "
+                            "the findings are printed as warnings instead of refusing to start.")
     p_rec.set_defaults(func=cmd_recorder)
 
     p_rc = sub.add_parser("reconcile", help="Cross-check agent-to-agent messages between ledgers.")

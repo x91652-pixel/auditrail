@@ -53,19 +53,26 @@ def _token_matches(supplied: Any, expected: str) -> bool:
     return hmac.compare_digest(a, b)
 
 
-def startup_permission_warnings(key_path, ledger_path, anchors_path=None) -> list[str]:
-    """Warnings about files the recorder depends on being open to other local accounts.
+def _permission_findings_for_start(key_path, ledger_path, anchors_path=None) -> list:
+    """Findings about files the recorder depends on being open to other local accounts.
 
     The recorder listens on a loopback TCP port; there is no socket file. The key
-    must be private, the ledger and anchors must not be writable by others.
+    must be private, the ledger and anchors must not be writable by others. Files that
+    do not exist yet (a new ledger) are skipped; a *key* that cannot be checked is
+    reported as "unchecked".
     """
-    from ._perms import permission_warnings
+    from ._perms import Finding, permission_findings
 
-    out = [f"signing key {m}" for m in permission_warnings(key_path, "secret")]
+    out = [Finding(f.kind, f"signing key {f.message}") for f in permission_findings(key_path, "secret")]
     for label, path in (("ledger", ledger_path), ("anchors", anchors_path)):
         if path and Path(path).exists():
-            out += [f"{label} {m}" for m in permission_warnings(path, "writable")]
+            out += [Finding(f.kind, f"{label} {f.message}") for f in permission_findings(path, "writable")]
     return out
+
+
+def startup_permission_warnings(key_path, ledger_path, anchors_path=None) -> list[str]:
+    """The messages of _permission_findings_for_start (kept for callers that only print)."""
+    return [f.message for f in _permission_findings_for_start(key_path, ledger_path, anchors_path)]
 
 
 class RecorderService:
@@ -277,8 +284,20 @@ def serve(args) -> int:
     from .anchor import FileSink, GitSink
     from .policy import PolicyEngine
 
-    for msg in startup_permission_warnings(args.key, args.ledger, args.anchors):
-        print(f"[RECORDER][WARN] {msg}", flush=True)
+    findings = _permission_findings_for_start(args.key, args.ledger, args.anchors)
+    loose = [f for f in findings if f.kind == "loose"]
+    for f in findings:
+        if f.kind == "unchecked":  # never counted as a pass; it also never blocks, because we cannot know
+            print(f"[RECORDER][WARN] NOT CHECKED: {f.message}", flush=True)
+    if loose and not getattr(args, "allow_loose_permissions", False):
+        for f in loose:
+            print(f"[RECORDER][ERROR] {f.message}", flush=True)
+        print("[RECORDER] REFUSING TO START: files the recorder depends on are open to other accounts. "
+              "Fix the permissions, or start anyway with --allow-loose-permissions (then this is a warning).",
+              flush=True)
+        return 2
+    for f in loose:
+        print(f"[RECORDER][WARN] loose permissions accepted (--allow-loose-permissions): {f.message}", flush=True)
     signer = Signer.from_file(args.key)
     ledger = Ledger(args.ledger, signer=signer)
     policy_version, policy_hash = "", None  # no policy file: heartbeats say "unknown" rather than inventing a hash
