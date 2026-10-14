@@ -130,7 +130,8 @@ def test_unsupported_algorithm_with_keys_is_not_ok_in_either_language(tmp_path):
     pub = pub_file(tmp_path, s)
     res = verify_all(tmp_path / "l.jsonl", public_keys={s.key_id: s.public_hex})
     assert res["status"] == "UNSUPPORTED_ALGORITHM" and res["bad_seq"] == 0
-    assert "not evidence of tampering" in res["detail"]
+    assert "Inconclusive, not OK" in res["detail"] and "not evidence of tampering" not in res["detail"]
+    assert "does not mean the records were not tampered with" in res["detail"]
     r = rust(tmp_path / "l.jsonl", pub)
     assert r["status"] == "UNSUPPORTED_ALGORITHM" and r["bad_seq"] == 0
 
@@ -200,11 +201,13 @@ def test_a_value_outside_the_grammar_is_malformed_in_both_languages(tmp_path, de
 @pytest.mark.parametrize("value", GOOD_TOKENS)
 def test_a_well_formed_unknown_token_is_unsupported_not_malformed(tmp_path, default_signer, value):
     make_ledger(tmp_path / "l.jsonl", default_signer)
-    rewrite(tmp_path / "l.jsonl", lambda r: r[2].update(sig_alg=value))
+    # the LAST record: with a later record the re-hash would leave its old signature stale, which is (rightly) a
+    # BAD_SIGNATURE found before the inconclusive status is reported
+    rewrite(tmp_path / "l.jsonl", lambda r: r[-1].update(sig_alg=value))
     pub = pub_file(tmp_path, default_signer)
     keys = {default_signer.key_id: default_signer.public_hex}
     res = verify_all(tmp_path / "l.jsonl", public_keys=keys)
-    assert res["status"] == "UNSUPPORTED_ALGORITHM" and res["bad_seq"] == 2
+    assert res["status"] == "UNSUPPORTED_ALGORITHM" and res["bad_seq"] == 3
     assert verify_all(tmp_path / "l.jsonl")["status"] == "OK"
     assert rust(tmp_path / "l.jsonl", pub)["status"] == "UNSUPPORTED_ALGORITHM"
     assert rust(tmp_path / "l.jsonl")["status"] == "OK"
@@ -321,7 +324,7 @@ def test_property_python_and_rust_agree_on_any_sig_alg_value(tmp_path_factory, v
     tmp = tmp_path_factory.mktemp("prop")
     s = Signer.from_seed(SEED)
     make_ledger(tmp / "l.jsonl", s, n=3)
-    rewrite(tmp / "l.jsonl", lambda r: r[1].update(sig_alg=value))
+    rewrite(tmp / "l.jsonl", lambda r: r[-1].update(sig_alg=value))
     pub = pub_file(tmp, s) if with_keys else None
     keys = {s.key_id: s.public_hex} if with_keys else None
     py = verify_all(tmp / "l.jsonl", public_keys=keys)
@@ -331,3 +334,125 @@ def test_property_python_and_rust_agree_on_any_sig_alg_value(tmp_path_factory, v
     # and never a quiet OK for an algorithm that was not checked while keys were required
     if with_keys:
         assert py["status"] != "OK"
+
+
+# ---------------------------------------------------------------- R-1: inconclusive never outranks definite evidence
+#
+# UNSUPPORTED_* can be provoked by anyone who can rewrite the file (add a sig_alg, set format to 3), so it must
+# not hide what a witness or a signature can still show.
+
+DEFINITE = {"TAMPERED_LEDGER", "BAD_SIGNATURE", "UNSIGNED_RECORD", "UNKNOWN_KEY", "TAMPERED_ANCHOR",
+            "UNSIGNED_ANCHOR", "REWRITTEN", "TRUNCATED", "SINK_MISMATCH"}
+INCONCLUSIVE_STATUSES = {"UNSUPPORTED_ALGORITHM", "UNSUPPORTED_FORMAT"}
+
+
+def witnessed_ledger(tmp_path, signer, n=6):
+    led = make_ledger(tmp_path / "l.jsonl", signer, n=n)
+    anchor_ledger(led, tmp_path / "a.jsonl", sink=FileSink(tmp_path / "w.jsonl"), signer=signer)
+    return n
+
+
+@pytest.mark.parametrize("where", ["middle", "last"])
+@pytest.mark.parametrize("extra", [{"sig_alg": "x-future-alg"}, {"format": 3}, {"sig_alg": "es256", "format": 3}],
+                         ids=["sig_alg", "format3", "both"])
+@pytest.mark.parametrize("inputs", ["keys+witness", "witness-only", "keys-only"])
+def test_r1_an_edit_with_an_inconclusive_marker_is_still_reported_as_evidence(tmp_path, default_signer, where, extra, inputs):
+    witnessed_ledger(tmp_path, default_signer)
+    index = 2 if where == "middle" else -1
+    rewrite(tmp_path / "l.jsonl", lambda r: r[index].update({"decision": "allow", "reason": None, **extra}))
+    keys = {default_signer.key_id: default_signer.public_hex} if "keys" in inputs else None
+    witness = tmp_path / "w.jsonl" if "witness" in inputs else None
+    pub = pub_file(tmp_path, default_signer) if keys else None
+    py = verify_all(tmp_path / "l.jsonl", public_keys=keys, witness_path=witness)
+    rs = rust(tmp_path / "l.jsonl", pub, witness)
+    assert py["status"] == rs["status"], (py, rs)
+    assert py.get("bad_seq") == rs.get("bad_seq")
+    if witness is not None:
+        # a witness copy of the real head is present: the rewrite must be found, never "could not judge"
+        assert py["status"] in DEFINITE, (where, extra, inputs, py)
+    if inputs == "keys-only" and where == "middle":
+        assert py["status"] in DEFINITE  # the following records' signatures no longer match their new hashes
+
+
+def test_r1_with_keys_only_and_nothing_after_the_edit_the_status_is_inconclusive_and_says_it_can_be_provoked(
+        tmp_path, default_signer):
+    """The one case a key alone cannot settle: the LAST record edited and given a sig_alg. The answer is a failure
+    (not OK) whose wording does not claim the records were untouched."""
+    witnessed_ledger(tmp_path, default_signer)
+    rewrite(tmp_path / "l.jsonl", lambda r: r[-1].update(decision="allow", reason=None, sig_alg="x-future-alg"))
+    keys = {default_signer.key_id: default_signer.public_hex}
+    res = verify_all(tmp_path / "l.jsonl", public_keys=keys)
+    assert res["status"] == "UNSUPPORTED_ALGORITHM" and res["bad_seq"] == 5
+    assert "provoked by someone without the key" in res["detail"]
+    assert "not evidence of tampering" not in res["detail"]
+    r = rust(tmp_path / "l.jsonl", pub_file(tmp_path, default_signer))
+    assert r["status"] == "UNSUPPORTED_ALGORITHM" and "provoked by someone without the key" in r["detail"]
+
+
+def test_r1_a_definite_status_found_later_outranks_an_earlier_inconclusive_one(tmp_path):
+    s = FutureSigner.from_seed(SEED)
+    make_ledger(tmp_path / "l.jsonl", s, n=5)  # every record names x-future-alg: inconclusive from seq 0
+    recs = [json.loads(x) for x in (tmp_path / "l.jsonl").read_text(encoding="utf-8").splitlines()]
+    recs[3]["decision"] = "deny"  # hash not recomputed
+    (tmp_path / "e.jsonl").write_text("".join(_canonical(x) + "\n" for x in recs), encoding="utf-8", newline="\n")
+    keys = {s.key_id: s.public_hex}
+    res = verify_all(tmp_path / "e.jsonl", public_keys=keys)
+    assert res["status"] == "TAMPERED_LEDGER" and res["bad_seq"] == 3
+    assert rust(tmp_path / "e.jsonl", pub_file(tmp_path, s))["status"] == "TAMPERED_LEDGER"
+
+
+def test_r1_coverage_is_reported_with_the_inconclusive_result(tmp_path):
+    s = FutureSigner.from_seed(SEED)
+    (line,) = anchor_lines(tmp_path, s, s)
+    res = verify_all(tmp_path / "l.jsonl", public_keys={s.key_id: s.public_hex}, witness_path=tmp_path / "w.jsonl")
+    assert res["status"] == "UNSUPPORTED_ALGORITHM"
+    assert res["anchored_upto"] == 3 and res["unanchored_tail"] == 0
+    assert res["unchecked_algorithms"] == ["x-future-alg"]
+    r = rust(tmp_path / "l.jsonl", pub_file(tmp_path, s), tmp_path / "w.jsonl")
+    assert r["status"] == "UNSUPPORTED_ALGORITHM" and r["anchored_upto"] == 3 and r["unanchored_tail"] == 0
+
+
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(index=st.integers(0, 5), field=st.sampled_from(["decision", "reason", "tool", "agent_id"]),
+       token=st.sampled_from(["x-future-alg", "es256", "a", "ml-dsa-65", None]),
+       fmt=st.sampled_from([None, 0, 1, 3, 99]), with_keys=st.booleans())
+def test_property_with_a_witness_an_edit_is_never_degraded_to_inconclusive(tmp_path_factory, index, field, token, fmt,
+                                                                           with_keys):
+    tmp = tmp_path_factory.mktemp("r1")
+    s = Signer.from_seed(SEED)
+    witnessed_ledger(tmp, s)
+    extra = {}
+    if token is not None:
+        extra["sig_alg"] = token
+    if fmt is not None:
+        extra["format"] = fmt
+    rewrite(tmp / "l.jsonl", lambda r: r[index].update({field: "EDITED", **extra}))
+    keys = {s.key_id: s.public_hex} if with_keys else None
+    pub = pub_file(tmp, s) if with_keys else None
+    py = verify_all(tmp / "l.jsonl", public_keys=keys, witness_path=tmp / "w.jsonl")
+    rs = rust(tmp / "l.jsonl", pub, tmp / "w.jsonl")
+    assert py["status"] == rs["status"], (py, rs)
+    assert py["status"] not in INCONCLUSIVE_STATUSES and py["status"] != "OK", py
+
+
+# ---------------------------------------------------------------- R-3: anchors' algorithms are named too
+
+def test_r3_a_version_3_anchor_names_its_algorithm_in_the_unchecked_list_without_keys(tmp_path, default_signer):
+    s = FutureSigner.from_seed(SEED)
+    anchor_lines(tmp_path, s, default_signer)  # ledger signed ed25519, anchor says x-future-alg
+    res = verify_all(tmp_path / "l.jsonl", witness_path=tmp_path / "w.jsonl")
+    assert res["status"] == "OK" and res["unchecked_algorithms"] == ["x-future-alg"]
+    assert any("x-future-alg" in n and "anchors" in n for n in res["notes"])
+    r = rust(tmp_path / "l.jsonl", None, tmp_path / "w.jsonl")
+    assert r["status"] == "OK" and r["unchecked_algorithms"] == ["x-future-alg"]
+    res2 = verify_all(tmp_path / "l.jsonl", anchors_path=tmp_path / "a.jsonl", sinks={"file": FileSink(tmp_path / "w.jsonl")})
+    assert res2["status"] == "OK" and res2["unchecked_algorithms"] == ["x-future-alg"]
+
+
+def test_r3_the_cli_prints_the_algorithm_name_when_it_could_not_check_it(tmp_path, default_signer, capsys):
+    from auditrail.cli import main
+
+    s = FutureSigner.from_seed(SEED)
+    anchor_lines(tmp_path, s, default_signer)
+    assert main(["verify", str(tmp_path / "l.jsonl"), "--witness-file", str(tmp_path / "w.jsonl")]) == 0
+    assert "x-future-alg" in capsys.readouterr().out
