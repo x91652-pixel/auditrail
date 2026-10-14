@@ -56,20 +56,32 @@ def posix_findings(mode: int, role: str) -> list[str]:
     return []
 
 
-def windows_findings(acl_lines: list[str], role: str) -> list[str]:
-    """Findings from `SID|Allow/Deny|rights` lines (see _PS_SCRIPT)."""
-    mask = _READ_DATA | _WRITE if role == "secret" else _WRITE
-    found: list[str] = []
+def parse_acl_lines(acl_lines) -> list:
+    """The valid `SID|Allow-or-Deny|rights` entries among the lines PowerShell printed, as tuples.
+
+    A line that is not exactly that shape (a header, an error message, blank output) is not an entry.
+    """
+    entries = []
     for line in acl_lines:
         parts = line.strip().split("|")
         if len(parts) != 3:
             continue
         sid, kind, rights = parts
-        if kind != "Allow" or sid not in _BROAD_SIDS:
+        if not sid.startswith("S-") or kind not in ("Allow", "Deny"):
             continue
         try:
-            bits = int(rights)
+            entries.append((sid, kind, int(rights)))
         except ValueError:
+            continue
+    return entries
+
+
+def windows_findings(acl_lines: list[str], role: str) -> list[str]:
+    """Findings from `SID|Allow/Deny|rights` lines (see _PS_SCRIPT)."""
+    mask = _READ_DATA | _WRITE if role == "secret" else _WRITE
+    found: list[str] = []
+    for sid, kind, bits in parse_acl_lines(acl_lines):
+        if kind != "Allow" or sid not in _BROAD_SIDS:
             continue
         if bits & mask:
             what = "read or modify" if role == "secret" else "modify"
@@ -113,7 +125,13 @@ def permission_findings(path: Union[str, os.PathLike], role: str) -> list[Findin
         return [Finding("unchecked", f"{p}: permissions NOT CHECKED ({type(exc).__name__}; is PowerShell available?)")]
     if out.returncode != 0:
         return [Finding("unchecked", f"{p}: permissions NOT CHECKED (PowerShell exited {out.returncode})")]
-    return [Finding("loose", f"{p}: {m}") for m in windows_findings(out.stdout.splitlines(), role)]
+    lines = out.stdout.splitlines()
+    if not parse_acl_lines(lines):
+        # exit code 0 but nothing we can read: that is "could not check", never "nothing found". Every
+        # file has at least one ACE, so an empty result means the listing did not work.
+        return [Finding("unchecked", f"{p}: permissions NOT CHECKED (PowerShell succeeded but returned no "
+                                     "parseable access-control entries)")]
+    return [Finding("loose", f"{p}: {m}") for m in windows_findings(lines, role)]
 
 
 def permission_warnings(path: Union[str, os.PathLike], role: str) -> list[str]:
