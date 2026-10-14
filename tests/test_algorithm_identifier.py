@@ -96,7 +96,7 @@ def test_a_default_ledger_verifies_exactly_as_before(tmp_path, default_signer):
 
 def test_record_event_and_the_ledger_refuse_sig_alg_as_an_ordinary_field(tmp_path, default_signer):
     led = Ledger(tmp_path / "l.jsonl", signer=default_signer, fsync=False)
-    with pytest.raises(InvalidRecord, match="sig_alg"):
+    with pytest.raises(InvalidRecord, match=r"fields \['sig_alg'\] are set by the ledger itself"):
         led.record_event("heartbeat", sig_alg="x-future-alg", recorder_id="r", tools=[], policy_version="p",
                          policy_hash=None, calls_attempted=0, calls_recorded=0, interval_s=1)
     with pytest.raises(InvalidRecord, match="sig_alg"):
