@@ -206,8 +206,9 @@ def test_rehashing_after_an_edit_never_gets_past_the_signatures(m):
     # the same edit is invisible without keys (the documented v0.1 limit), except that a broken
     # sequence number is structural and is caught either way
     if key != "seq":
-        # MALFORMED_RECORD: a field the format constrains; LEGACY_FORMAT: the first record lost its `format`
-        assert verify_all(path)["status"] in ("OK", "MALFORMED_RECORD", "LEGACY_FORMAT")
+        # MALFORMED_RECORD: a field the format constrains; LEGACY_FORMAT: the first record lost its `format`;
+        # UNSUPPORTED_FORMAT: `format` became another integer (D-11: declined, not misread)
+        assert verify_all(path)["status"] in ("OK", "MALFORMED_RECORD", "LEGACY_FORMAT", "UNSUPPORTED_FORMAT")
 
 
 # ------------------------------------------------------------------ raw byte mutation

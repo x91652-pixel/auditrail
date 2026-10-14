@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import _strict
-from .keys import TAG_RECORD, verify_sig
-from .ledger import GENESIS_HASH, record_hash
+from .keys import DEFAULT_ALG, TAG_RECORD, key_algorithm, supported_algorithms, verify_with
+from .ledger import FORMAT_VERSION, GENESIS_HASH, record_hash
 
 
 def _fail(status: str, detail: str, **extra: Any) -> dict:
@@ -57,6 +57,21 @@ def _read_records(path: Path) -> tuple[list[dict], Optional[dict]]:
     return parse_ledger_bytes(path.read_bytes())
 
 
+def sig_alg_problem(rec: dict) -> Optional[str]:
+    """Why a record's `sig_alg` member is not acceptable, or None (absent is fine: it means ed25519).
+
+    Present means: a token of the format's grammar, and not "ed25519" -- the default is written by omission,
+    so one meaning has exactly one encoding."""
+    if "sig_alg" not in rec:
+        return None
+    alg = rec["sig_alg"]
+    if not _strict.is_alg_token(alg):
+        return "sig_alg is not a lower-case algorithm token ([a-z0-9-], 1-32 characters)"
+    if alg == DEFAULT_ALG:
+        return 'sig_alg is "ed25519", which is written by leaving the member out'
+    return None
+
+
 def _check_fields(rec: dict, seq: int) -> Optional[dict]:
     """Per-record field rules (spec section 3). Runs after the hash and signature hold."""
     bad = lambda d: _fail("MALFORMED_RECORD", f"seq={seq}: {d}", bad_seq=seq)  # noqa: E731
@@ -67,6 +82,9 @@ def _check_fields(rec: dict, seq: int) -> Optional[dict]:
         return bad("kind is not a string")
     if "policy_hash" in rec and rec["policy_hash"] is not None and not _strict.is_hex(rec["policy_hash"], 64):
         return bad("policy_hash is not 64 lowercase hex characters (or null)")
+    why = sig_alg_problem(rec)
+    if why is not None:
+        return bad(why)
     if kind == "heartbeat":
         tools = rec.get("tools")
         if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
@@ -88,6 +106,7 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
         if problem is not None:
             return problem
     prev = GENESIS_HASH
+    supported = supported_algorithms()
     for expected, rec in enumerate(records):
         if not _strict.is_int(rec.get("seq")) or rec["seq"] != expected:
             return _fail("TAMPERED_LEDGER", f"expected seq={expected}, found seq={rec.get('seq')!r}", bad_seq=expected)
@@ -96,6 +115,12 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
         stored = rec.get("hash")
         if not isinstance(stored, str) or record_hash(prev, rec) != stored:
             return _fail("TAMPERED_LEDGER", f"seq={expected}: hash does not match the record's contents", bad_seq=expected)
+        fmt = rec.get("format")
+        if _strict.is_int(fmt) and fmt != FORMAT_VERSION:
+            # after the hash held: a different format that still chains is not misread, it is declined
+            return _fail("UNSUPPORTED_FORMAT",
+                         f"seq={expected}: format {fmt} is not understood by this verifier (it reads format {FORMAT_VERSION})",
+                         bad_seq=expected)
         if public_keys is not None:
             key_id, sig = rec.get("key_id"), rec.get("sig")
             if not isinstance(key_id, str) or not key_id or not isinstance(sig, str) or not sig:
@@ -103,7 +128,19 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
             pub = public_keys.get(key_id)
             if pub is None:
                 return _fail("UNKNOWN_KEY", f"seq={expected} is signed by key_id={key_id}, which is not in the trusted keys", bad_seq=expected)
-            if not verify_sig(pub, TAG_RECORD, stored.encode("ascii"), sig):
+            why = sig_alg_problem(rec)
+            if why is not None:
+                return _fail("MALFORMED_RECORD", f"seq={expected}: {why}", bad_seq=expected)
+            alg = rec.get("sig_alg", DEFAULT_ALG)
+            if alg not in supported:
+                return _fail("UNSUPPORTED_ALGORITHM",
+                             f"seq={expected} is signed with algorithm {alg!r}, which this verifier does not implement; "
+                             "its signature was not checked (this is not evidence of tampering)", bad_seq=expected)
+            if key_algorithm(public_keys, key_id) != alg:
+                return _fail("BAD_SIGNATURE",
+                             f"seq={expected}: record names algorithm {alg!r} but the trusted key {key_id} is a "
+                             f"{key_algorithm(public_keys, key_id)!r} key (algorithm mismatch)", bad_seq=expected)
+            if not verify_with(alg, pub, TAG_RECORD, stored.encode("ascii"), sig):
                 return _fail("BAD_SIGNATURE", f"seq={expected}: signature does not verify", bad_seq=expected)
         problem = _check_fields(rec, expected)
         if problem is not None:
@@ -251,8 +288,12 @@ def verify_all(
         notes.append(f"{tail} record(s) after the last anchor are not covered by any anchor")
     if len(policy_hashes) > 1:
         notes.append(f"policy changed {len(policy_hashes) - 1} time(s) across call records (see policy_hashes)")
+    unchecked_algs = sorted({r["sig_alg"] for r in records if "sig_alg" in r and r["sig_alg"] not in supported_algorithms()})
+    if unchecked_algs:
+        notes.append(f"records use signature algorithm(s) {unchecked_algs} that this verifier cannot check; "
+                     "their signatures were not checked")
     if max_gap_s is None:
         notes.append("heartbeats NOT checked (no max gap given): silent periods are not detectable")
     detail = f"{len(records)} record(s), chain intact" + (", all signatures valid" if public_keys is not None else "")
     return {"status": "OK", "detail": detail, **base, "anchored_upto": anchored_upto,
-            "unanchored_tail": tail, "changes": changes, "notes": notes}
+            "unanchored_tail": tail, "changes": changes, "notes": notes, "unchecked_algorithms": unchecked_algs}

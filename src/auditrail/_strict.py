@@ -107,6 +107,15 @@ def parse_ts(ts: Any) -> Optional[int]:
     return calendar.timegm((y, mo, d, h, mi, s, 0, 0, 0))
 
 
+_ALG_TOKEN = re.compile(r"[a-z0-9-]{1,32}")
+
+
+def is_alg_token(value: Any) -> bool:
+    """A signature-algorithm identifier as the format writes it: 1-32 of a-z, 0-9 and '-', all ASCII.
+    fullmatch, never `$`: a trailing newline is not part of a token."""
+    return isinstance(value, str) and _ALG_TOKEN.fullmatch(value) is not None
+
+
 def is_int(value: Any) -> bool:
     """A real integer; bool is not one."""
     return type(value) is int

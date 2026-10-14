@@ -19,15 +19,16 @@ from typing import Any, Callable, Optional
 
 from . import _strict
 from ._strict import is_int
-from .keys import TAG_ANCHOR, Signer, verify_sig
+from .keys import DEFAULT_ALG, TAG_ANCHOR, Signer, key_algorithm, supported_algorithms, verify_with
 from .ledger import GENESIS_HASH, Ledger, _canonical
 
 ANCHOR_VERSION = 1  # unsigned
 SIGNED_ANCHOR_VERSION = 2
+ALG_ANCHOR_VERSION = 3  # signed with an algorithm other than ed25519; carries `sig_alg` in the hashed body
 NO_PREV_ANCHOR = GENESIS_HASH
 BODY_KEYS = ("anchor_version", "seq", "head_hash", "prev_anchor", "created_at")
-BODY_KEYS_BY_VERSION = {1: BODY_KEYS, 2: BODY_KEYS + ("key_id",)}
-LINE_KEYS = set(BODY_KEYS_BY_VERSION[2]) | {"anchor_hash", "sink_ref", "sig"}
+BODY_KEYS_BY_VERSION = {1: BODY_KEYS, 2: BODY_KEYS + ("key_id",), 3: BODY_KEYS + ("key_id", "sig_alg")}
+LINE_KEYS = set(BODY_KEYS_BY_VERSION[3]) | {"anchor_hash", "sink_ref", "sig"}
 
 
 class AnchorError(Exception):
@@ -71,8 +72,12 @@ def build_anchor(
             bad_seq=bad_seq,
         )
     head = records[-1]
+    if signer is None:
+        version = ANCHOR_VERSION
+    else:
+        version = SIGNED_ANCHOR_VERSION if signer.alg == DEFAULT_ALG else ALG_ANCHOR_VERSION
     body = {
-        "anchor_version": ANCHOR_VERSION if signer is None else SIGNED_ANCHOR_VERSION,
+        "anchor_version": version,
         "seq": head["seq"],
         "head_hash": head["hash"],
         "prev_anchor": prev_anchor_hash,
@@ -80,6 +85,8 @@ def build_anchor(
     }
     if signer is not None:
         body["key_id"] = signer.key_id
+        if version == ALG_ANCHOR_VERSION:
+            body["sig_alg"] = signer.alg
     anchor_hash = _anchor_hash(body)
     out = {**body, "anchor_hash": anchor_hash}
     if signer is not None:
@@ -98,7 +105,7 @@ def _check_anchor_line(rec: Any, public_keys: Optional[dict[str, str]]) -> Optio
         return tam("unsupported anchor_version")
     if any(k not in rec for k in keys):
         return tam("malformed anchor line")
-    allowed = set(keys) | {"anchor_hash", "sink_ref"} | ({"sig"} if version == 2 else set())
+    allowed = set(keys) | {"anchor_hash", "sink_ref"} | ({"sig"} if version in (2, 3) else set())
     if set(rec) - allowed:
         return tam("unexpected fields in anchor line")
     if not is_int(rec["seq"]) or rec["seq"] < 0:
@@ -107,13 +114,22 @@ def _check_anchor_line(rec: Any, public_keys: Optional[dict[str, str]]) -> Optio
         return tam("malformed anchor line")
     if "sink_ref" in rec and not isinstance(rec["sink_ref"], str):
         return tam("malformed anchor line")
+    if version == 3 and (not _strict.is_alg_token(rec["sig_alg"]) or rec["sig_alg"] == DEFAULT_ALG):
+        return tam("malformed anchor line")  # sig_alg must be a token and is never written for ed25519
     if rec.get("anchor_hash") != _anchor_hash({k: rec[k] for k in keys}):
         return tam("anchor_hash does not match body")
-    if version == 2:
+    if version in (2, 3):
+        alg = rec["sig_alg"] if version == 3 else DEFAULT_ALG
         pub = (public_keys or {}).get(rec["key_id"])
         if public_keys is not None and pub is None:
             return "UNKNOWN_KEY", f"anchor is signed by key_id={rec['key_id']}, which is not in the trusted keys"
-        if pub is not None and not verify_sig(pub, TAG_ANCHOR, rec["anchor_hash"].encode("ascii"), rec.get("sig", "")):
+        if public_keys is not None and alg not in supported_algorithms():
+            return ("UNSUPPORTED_ALGORITHM",
+                    f"anchor is signed with algorithm {alg!r}, which this verifier does not implement; "
+                    "its signature was not checked (this is not evidence of tampering)")
+        if pub is not None and key_algorithm(public_keys, rec["key_id"]) != alg:
+            return "BAD_SIGNATURE", f"anchor names algorithm {alg!r} but the trusted key is of another type (algorithm mismatch)"
+        if pub is not None and not verify_with(alg, pub, TAG_ANCHOR, rec["anchor_hash"].encode("ascii"), rec.get("sig", "")):
             return "BAD_SIGNATURE", "anchor signature does not verify"
     elif public_keys is not None:
         return "UNSIGNED_ANCHOR", "anchor is unsigned (version 1), but signatures are required"
