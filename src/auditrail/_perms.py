@@ -37,10 +37,30 @@ _BROAD_SIDS = {
 }
 
 _PS_SCRIPT = (
+    "$ErrorActionPreference = 'Stop'; "
+    "try { "
     "$p = $env:AUDITRAIL_CHECK_PATH; "
     "(Get-Acl -LiteralPath $p).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | "
-    "ForEach-Object { $_.IdentityReference.Value + '|' + $_.AccessControlType + '|' + [int64]$_.FileSystemRights }"
+    "ForEach-Object { $_.IdentityReference.Value + '|' + $_.AccessControlType + '|' + [int64]$_.FileSystemRights } "
+    "} catch { "
+    "[Console]::Error.WriteLine($_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 1 "
+    "}"
 )
+
+
+def clean_stderr(text, limit: int = 300) -> str:
+    """The start of a stderr text made safe to print: control characters become spaces, runs of whitespace
+    collapse, at most `limit` characters. Only what PowerShell said about its own failure; no environment."""
+    if not text:
+        return ""
+    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", " ", str(text))  # colour codes
+    text = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", text)
+    return re.sub(r" {2,}", " ", text).strip()[:limit]
+
+
+def _failure(p, why: str, stderr) -> "Finding":
+    detail = clean_stderr(stderr)
+    return Finding("unchecked", f"{p}: permissions NOT CHECKED ({why}{': ' + detail if detail else ''})")
 
 
 def posix_findings(mode: int, role: str) -> list[str]:
@@ -141,13 +161,12 @@ def permission_findings(path: Union[str, os.PathLike], role: str) -> list[Findin
     except (OSError, subprocess.SubprocessError) as exc:
         return [Finding("unchecked", f"{p}: permissions NOT CHECKED ({type(exc).__name__}; is PowerShell available?)")]
     if out.returncode != 0:
-        return [Finding("unchecked", f"{p}: permissions NOT CHECKED (PowerShell exited {out.returncode})")]
+        return [_failure(p, f"PowerShell exited {out.returncode}", out.stderr)]
     lines = out.stdout.splitlines()
     if not parse_acl_lines(lines):
         # exit code 0 but nothing we can read: that is "could not check", never "nothing found". Every
         # file has at least one ACE, so an empty result means the listing did not work.
-        return [Finding("unchecked", f"{p}: permissions NOT CHECKED (PowerShell succeeded but returned no "
-                                     "parseable access-control entries)")]
+        return [_failure(p, "PowerShell succeeded but returned no parseable access-control entries", out.stderr)]
     odd = unparsed_broad_lines(lines)
     if odd:
         shown = "; ".join(repr(x[:80]) for x in odd[:3])
