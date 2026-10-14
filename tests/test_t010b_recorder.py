@@ -42,6 +42,15 @@ def started(monkeypatch):
     return seen
 
 
+def refused(tmp_path, key, **kw):
+    """serve() must return 2 without starting; if it starts, the fake start() raises KeyboardInterrupt, which
+    would abort the whole pytest session, so turn that into an ordinary failure."""
+    try:
+        return recorder.serve(args(tmp_path, key, **kw))
+    except KeyboardInterrupt:
+        pytest.fail("the recorder started although it should have refused")
+
+
 def cannot_run(monkeypatch, key):
     monkeypatch.setattr(
         recorder, "_permission_findings_for_start",
@@ -52,7 +61,7 @@ def cannot_run(monkeypatch, key):
 
 def test_d10_unchecked_refuses_to_start_by_default(tmp_path, capsys, monkeypatch, key, started):
     cannot_run(monkeypatch, key)
-    code = recorder.serve(args(tmp_path, key))
+    code = refused(tmp_path, key)
     out = capsys.readouterr().out
     assert code == 2
     assert not started, "the service must not have been started"
@@ -87,7 +96,7 @@ def test_d10_windows_powershell_failures_all_end_in_refusal(tmp_path, capsys, mo
         return subprocess.CompletedProcess(a, 1, stdout="", stderr="boom")
 
     monkeypatch.setattr(_perms.subprocess, "run", fake_run)
-    assert recorder.serve(args(tmp_path, key)) == 2
+    assert refused(tmp_path, key) == 2
     out = capsys.readouterr().out
     assert "REFUSING TO START" in out and "NOT CHECKED" in out and not started
     with pytest.raises(KeyboardInterrupt):
@@ -119,7 +128,7 @@ def test_d8_2_an_anchors_file_others_can_write_is_refused_and_the_flag_downgrade
     anchors = tmp_path / "anchors.jsonl"
     anchors.write_text("", encoding="utf-8")
     _make_writable_by_everyone(anchors)
-    code = recorder.serve(args(tmp_path, key, anchors=anchors))
+    code = refused(tmp_path, key, anchors=anchors)
     out = capsys.readouterr().out
     assert code == 2 and "REFUSING TO START" in out and "anchors" in out
     assert not started
