@@ -1,12 +1,12 @@
 # auditrail 實作狀態盤點（Phase 0 基線）
 
-盤點日期：2026-10-13。基準：分支 `release-verifier-binaries`，commit `1e8dc9c`（= `main` 的 `c3aa057` 再加上 release workflow）。
+盤點日期：2026-10-14（重做；2026-10-13 的第一版建立在舊底 `1e8dc9c` 上）。基準：`origin/main` = `1f8749b`（已含 PR #3 `09f1c0e` 與 PR #2 `c2c0209`）。本檔所在分支 `phase-0-baseline-status` 只比該基準多這份文件與下列文件修正。
 
 **這份文件只做一件事：把 README / SECURITY / ROADMAP 的每一項主張對照到實際程式碼與測試。**
 沒有改任何程式行為；同一次變更中只有文件被修改（見第 7 節）。
 
-> 範圍說明：PR #2（把完整政策 hash 綁進每筆呼叫紀錄、`LEGACY_FORMAT`、`--legacy-v01`）尚未合併，不在這個基線裡。
-> 因此本文件沒有涵蓋那些功能；合併後需重新盤點。
+> 範圍說明：基線已含 PR #2（完整政策 hash 綁進每筆呼叫紀錄、`LEGACY_FORMAT`、`--legacy-v01`）與 PR #3（發布流程）。
+> 不含 `phase-1-secure-defaults` 的任何內容（strict 模式、`state_change`、`SqliteReplayGuard`…）。
 
 狀態圖例：
 
@@ -23,15 +23,17 @@
 
 | 套件 | 指令 | 通過 | 失敗 | 跳過 |
 |---|---|---|---|---|
-| Python（Rust 執行檔已建置） | `pytest -q -rs` | **227** | 0 | 0 |
-| Python（Rust 執行檔不存在） | 同上，先把 `verifier/target/release/auditrail-verify(.exe)` 移走 | 221 | 0 | **6** |
+| Python（Rust 執行檔已建置） | `pytest -q -rs` | **253** | 0 | 0 |
+| Python（Rust 執行檔不存在） | 同上，先把 `verifier/target/release/auditrail-verify(.exe)` 移走 | 247 | 0 | **6** |
 | Rust verifier | `cd verifier && cargo test --locked --release` | 4（`robust` 2、`vectors` 2） | 0 | 0 |
 | Rust dashboard | `cd dashboard && cargo test --locked` | 3 | 0 | 0 |
-| Python ↔ Rust 互相比對 | 包含在 Python 套件內：`test_fuzz.py`（11）、`test_reader_agreement.py`（53）、`test_rust_verifier.py`（2）、`test_vectors.py`（15 個測試 = 13 組向量各一個 + 2 個檢查） | 全過（有執行檔時） | 0 | 見下 |
+| Python ↔ Rust 互相比對 | 包含在 Python 套件內：`test_fuzz.py`（11）、`test_reader_agreement.py`（53）、`test_rust_verifier.py`（2）、`test_vectors.py`（17 個測試 = 15 組向量各一個 + 2 個檢查）、`test_policy_hash.py`（24，其中 Rust 部分見下） | 全過（有執行檔時） | 0 | 見下 |
 
-各測試檔數量（合計 227）：`test_reader_agreement` 53、`test_anchor` 28、`test_v2_agents` 26、`test_edge_cases` 22、`test_logistics_sim` 20、`test_signed_evidence` 17、`test_vectors` 15、`test_fuzz` 11、`test_policy` 7、`test_agent_bridge` 6、`test_ledger` 5、`test_sandbox` 5、`test_cli` 4、`test_cli_v2` 4、`test_rust_verifier` 2、`test_demo` 1、`test_self_contained_demo` 1。
+各測試檔數量（合計 253）：`test_reader_agreement` 53、`test_anchor` 28、`test_v2_agents` 26、`test_policy_hash` 24、`test_edge_cases` 22、`test_logistics_sim` 20、`test_signed_evidence` 17、`test_vectors` 17、`test_fuzz` 11、`test_policy` 7、`test_agent_bridge` 6、`test_ledger` 5、`test_sandbox` 5、`test_cli` 4、`test_cli_v2` 4、`test_rust_verifier` 2、`test_demo` 1、`test_self_contained_demo` 1。
 
-CI（GitHub Actions）在 PR #1 / #2 / #3 上全部成功；`verifier` job 會先建置 Rust 執行檔，因此 CI 上不會有跳過。
+**注意（PR #2 新增的測試）：** `test_policy_hash.py` 裡有兩個測試只在找得到 Rust 執行檔時才會呼叫它（`if BINARY is not None:`），**找不到時不是跳過，而是只跑 Python 那一半並算「通過」**。所以沒有執行檔時的「247 通過」包含這兩個只驗了一半的測試；只有 `-rs` 看得到的 6 個才是被標記跳過的。
+
+CI（GitHub Actions）在 PR #1 / #2 / #3 合併前全部成功；`verifier` job 會先建置 Rust 執行檔，因此 CI 上不會有跳過。
 
 ## 2. 被跳過的測試
 
@@ -39,11 +41,11 @@ CI（GitHub Actions）在 PR #1 / #2 / #3 上全部成功；`verifier` job 會�
 
 | 條件 | 哪些測試 | 原因 | 啟用方式 |
 |---|---|---|---|
-| 找不到 Rust 執行檔 | `test_fuzz.py` 的 4 個（行 132、182、261、309）、`test_rust_verifier.py` 的 2 個 | 這些測試要拿 Python 與 Rust 的結果互相比對 | `cd verifier && cargo build --release`；測試會自動找 `verifier/target/release/auditrail-verify(.exe)`，或 PATH 上的 `auditrail-verify` |
+| 找不到 Rust 執行檔 | `test_fuzz.py` 的 4 個（行 132、182、262、310）、`test_rust_verifier.py` 的 2 個 | 這些測試要拿 Python 與 Rust 的結果互相比對 | `cd verifier && cargo build --release`；測試會自動找 `verifier/target/release/auditrail-verify(.exe)`，或 PATH 上的 `auditrail-verify` |
 | 找不到 `git` 執行檔 | `test_anchor.py` 中標 `needs_git` 的 git 見證測試 | 需要真的呼叫 git | 安裝 git（本次環境有，未跳過） |
 
 注意：`test_reader_agreement.py` 與 `test_fuzz.py` 其餘測試沒有 Rust 執行檔也會跑，只是不做跨語言比對。
-所以「Python 227 全過」不等於「Python 與 Rust 一致」——一致性只在執行檔存在時才被驗證。
+所以「Python 253 全過」不等於「Python 與 Rust 一致」——一致性只在執行檔存在時才被驗證。
 
 ## 3. 主張對照表
 
@@ -61,6 +63,18 @@ CI（GitHub Actions）在 PR #1 / #2 / #3 上全部成功；`verifier` job 會�
 | E8 | 參數與結果只存摘要，不存明文 | SECURITY | `ledger.py` `_digest` | `test_ledger.py::test_args_and_results_are_never_stored_in_plaintext`；`test_v2_agents.py::test_error_reason_is_a_digest_by_default_and_argument_text_never_lands_in_the_ledger` | ✅ | |
 | E9 | 帳本在多行程同時寫入時鏈不壞 | ROADMAP「Done」 | `ledger.py` `_file_lock`（msvcrt / fcntl） | `test_signed_evidence.py::test_concurrent_writers_from_several_processes_keep_the_chain_intact` | 🟡 | 只在本次平台（Windows）跑過；fcntl 路徑沒有實測 |
 | E10 | 記錄不含浮點數，任何語言可重現 hash | 格式規格 | `ledger.py` `_check_no_floats`；`_strict.py` | `test_signed_evidence.py::test_records_have_no_floats_so_any_language_can_reproduce_the_hash`；`test_reader_agreement.py` | ✅ | |
+
+### 3.1b PR #2 新增：政策 hash 綁定與舊帳本處理
+
+| # | 主張 | 來源 | 程式碼 | 測試 | 狀態 | 備註 |
+|---|---|---|---|---|---|---|
+| X1 | 每筆呼叫紀錄都帶完整政策 SHA-256（`policy_hash`） | PR #2 描述、規格 | `ledger.py` `CALL_FIELDS` / `call_fields`；`sandbox.py` `common`；`policy.py` `policy_hash` | `test_policy_hash.py::test_every_decision_carries_the_policy_hash`、`::test_recorder_path_keeps_the_hash` | ✅ | |
+| X2 | 版本字串沒變但規則變了，證據看得出來 | PR #2 描述 | 同上 | `::test_same_version_string_but_changed_rules_is_visible_in_the_evidence`、`::test_the_hash_is_a_function_of_the_rules_not_of_key_order_or_whitespace` | ✅ | |
+| X3 | 寫入端拒絕不是 64 位小寫十六進位（或 null）的值 | 規格 | `ledger.py` `call_fields` | `::test_the_writer_refuses_a_value_that_is_not_a_hash`（9 個參數） | ✅ | |
+| X4 | 兩個驗證器都拒絕偽造的非 hash 值（即使 hash 與簽章都對） | 規格 | `verifier.py` `_check_fields`；`lib.rs` | `::test_both_verifiers_reject_a_forged_non_hash_even_when_it_is_correctly_hashed`（7 個參數）；向量 14 | 🟡 | Rust 那一半在沒有執行檔時**不會跳過也不會執行**（見第 1 節注意事項） |
+| X5 | 真正的 v0.1 帳本得到 `LEGACY_FORMAT`，不是 `TAMPERED_LEDGER` | PR #2、SECURITY | `verifier.py:40`；`lib.rs:149`；`_strict.py` `is_legacy_text` | `::test_a_genuine_v01_ledger_is_not_called_tampered`；向量 15；夾具 `tests/fixtures/legacy_v01_ledger.jsonl`（由 v0.1 程式碼 `e37a7ed` 實際產生） | 🟡 | Rust 同上；夾具是真的，但只有 1 份、3 筆 |
+| X6 | `auditrail verify --legacy-v01` 只檢查舊雜湊鏈並說明有多弱 | PR #2 | `cli.py:31,187`；`verifier.py` `verify_legacy_v01` | `::test_legacy_option_checks_the_old_hash_chain_and_says_how_weak_that_is`、`::test_cli_legacy_flag` | ✅ | **只有 Python**；Rust 驗證器沒有這個旗標（README/SECURITY 已寫明） |
+| X7 | 沒有政策時，記錄者心跳寫 `policy_hash: null`（不是 `""`） | PR #2 | `recorder.py` | `test_policy_hash.py::test_recorder_path_keeps_the_hash`（第 87 行斷言 `beat["policy_hash"] is None`） | 🟡 | 測的是 `RecorderService` 類別；CLI 的 `serve()` 路徑沒有測 |
 
 ### 3.2 心跳與記錄者服務
 
@@ -90,7 +104,7 @@ README「Anchoring」寫的是 7 種結果。實際 Python `verify`（含錨點�
 | `UNSIGNED_ANCHOR` | `anchor.py:119` | `test_signed_evidence.py::test_unsigned_v1_anchor_is_refused_when_signatures_are_required` | ✅ |
 | `UNKNOWN_KEY` / `BAD_SIGNATURE` | `verifier.py`、`anchor.py` | `test_signed_evidence.py::test_a_different_key_is_rejected`、`::test_forged_anchor_in_witness_is_rejected`、向量 04、07 | ✅ |
 
-其他驗證狀態：`UNSIGNED_RECORD`、`MALFORMED_RECORD`、`NO_HEARTBEAT`、`HEARTBEAT_GAP`、`UNRECORDED_CALLS` 都有程式碼與測試。`LEGACY_FORMAT` 在這個基線裡**不存在**（在 PR #2）。
+其他驗證狀態：`UNSIGNED_RECORD`、`MALFORMED_RECORD`、`NO_HEARTBEAT`、`HEARTBEAT_GAP`、`UNRECORDED_CALLS` 都有程式碼與測試。`LEGACY_FORMAT`（PR #2）：Python `verifier.py:40`、Rust `lib.rs:149`，測試 `test_policy_hash.py::test_a_genuine_v01_ledger_is_not_called_tampered`、向量 15。
 
 ### 3.4 政策、代理間訊息、對帳、隔離
 
@@ -117,11 +131,11 @@ README「Anchoring」寫的是 7 種結果。實際 Python `verify`（含錨點�
 | # | 主張 | 來源 | 程式碼 | 測試 | 狀態 | 備註 |
 |---|---|---|---|---|---|---|
 | V1 | 獨立的 Rust 驗證器，單一離線執行檔，無網路 | README、SECURITY 表 | `verifier/src/lib.rs`、`main.rs` | `verifier/tests/vectors.rs`、`robust.rs`；`test_rust_verifier.py`；`test_vectors.py` | ✅ | 「獨立」= 另一種語言的實作，**同一作者**（SECURITY 已寫明） |
-| V2 | 以同一組一致性向量測試兩邊（README 與 ROADMAP 寫法不同，見第 6 節） | README、ROADMAP | `docs/spec/vectors/`（13 組，`generate.py`） | `test_vectors.py`（15 個測試 = 13 組向量各一個 + 2 個檢查）、`vectors.rs` | ✅ | |
+| V2 | 以同一組一致性向量測試兩邊（README 與 ROADMAP 寫法不同，見第 6 節） | README、ROADMAP | `docs/spec/vectors/`（15 組，`generate.py`；14 = 畸形 policy_hash、15 = 真正的 v0.1 帳本） | `test_vectors.py`（17 個測試 = 15 組向量各一個 + 2 個檢查）、`vectors.rs` | ✅ | |
 | V3 | Python 與 Rust 以 Hypothesis 互相模糊測試 | README | — | `test_fuzz.py`（11）、`test_reader_agreement.py`（53） | ✅ | 需要先建置 Rust 執行檔（第 2 節） |
 | V4 | 兩邊讀檔規則一致（UTF-8、換行、浮點、整數範圍、時間戳…） | SECURITY 版本史、規格第 2 節 | `_strict.py`；`lib.rs` | `test_reader_agreement.py`（53 個逐案測試） | ✅ | |
 | V5 | `auditrail-verify` 可直接當命令使用 | README | `verifier/src/main.rs` | `test_rust_verifier.py`（用路徑呼叫） | 🟡 | **`pip install` 不會安裝這個命令**（`pyproject.toml` 只有 `auditrail`）；只有自己建置的 Rust 執行檔或 release 下載才有。README 沒說清楚（第 6 節） |
-| V6 | 預先建置的驗證器執行檔 + SHA256SUMS + 出處證明 | README | `.github/workflows/release.yml` | 無（從未在 GitHub 上跑過） | ⚠️ | README 已寫明「尚未發布」；workflow 在 PR #3，**尚未合併、未實際執行** |
+| V6 | 預先建置的驗證器執行檔 + SHA256SUMS + 出處證明 | README | `.github/workflows/release.yml` | 無（從未在 GitHub 上跑過） | ⚠️ | README 已寫明「尚未發布」；workflow 已隨 PR #3 合併進 main，但**從未在 GitHub 上執行過**（`gh run list --workflow release.yml` 無紀錄）；也沒有任何 tag 或 Release |
 | V7 | 兩次乾淨建置位元組相同 | README | `release.yml` 的建置旗標 | 本機驗證過一次（同一台機器） | 🟡 | 跨機器相同**未驗證**，README 已如實寫明 |
 | V8 | 公開格式規格 `docs/spec/evidence-format-v2.md` | README | 規格 + 向量 | `test_vectors.py` | ✅ | |
 | V9 | `auditrail keygen` / `anchor --key` / `verify --pubkey --anchors --git-repo --witness-file --max-gap --json` | README | `cli.py` | `test_cli_v2.py::test_keygen_then_signed_anchor_then_verify_with_witness`；`test_anchor.py::test_cli_json_output_for_verify_and_anchor` | ✅ | |
@@ -153,11 +167,11 @@ README「Anchoring」寫的是 7 種結果。實際 Python `verify`（含錨點�
 ### 3.7 ROADMAP「Done in v0.2」
 
 ROADMAP 列的 9 項（簽章、記錄者服務、心跳、錨點、Rust 驗證器、trifecta workflow、per-agent key/receipt/reconcile、隔離環境允許清單與輸出防偽、錯誤文字摘要與並行寫入）都已在上表對應。
-唯一的**數字錯誤**：「ten conformance vectors」——實際是 13 組（見第 6 節）。
+唯一的**數字錯誤**：「ten conformance vectors」——實際是 15 組（見第 6 節）。
 
 ## 4. 攻擊模擬（`python -m examples.logistics_sim.run`）
 
-結果：正常營運 9/9 放行；攻擊 16 項，13 項防禦成功（被擋下或偵測到），3 項為文件化的已知缺口；全部符合預期；日誌 39 筆、雜湊鏈完整。
+結果（2026-10-14 在 `origin/main` 上重跑，與第一版相同）：正常營運 9/9 放行；攻擊 16 項，13 項防禦成功（被擋下或偵測到），3 項為文件化的已知缺口；全部符合預期；日誌 39 筆、雜湊鏈完整。
 
 | # | 攻擊 | 結果 | 預期 | 分類 | 與 SECURITY.md 一致？ |
 |---|---|---|---|---|---|
@@ -209,11 +223,11 @@ gh repo edit x91652-pixel/auditrail --description "Verifiable evidence layer for
 | D2 | README 同節 | `auditrail-verify evidence.jsonl ...` 彷彿裝好就能用 | `pip install` 只安裝 `auditrail`；`auditrail-verify` 是 Rust 執行檔，要自己建置或下載 | 已改文件 |
 | D3 | README「Anchoring」 | 引用 `auditrail-docs/錨定協定.md` | 該檔案不在 repo 內（目錄不存在）。`anchor.py` 的 docstring 與 `tests/test_anchor.py` 的 docstring 也引用同一路徑 | README 已改指向 `docs/spec/evidence-format-v2.md`；兩處 docstring 屬程式碼，未動 |
 | D4 | README「Anchoring」 | `verify --anchors` 結果為 7 種 | 實際還有 `UNSIGNED_ANCHOR`、`UNKNOWN_KEY`、`BAD_SIGNATURE` | 已改文件 |
-| D5 | ROADMAP「Done in v0.2」 | 「ten conformance vectors」 | 13 組 | 已改文件 |
+| D5 | ROADMAP「Done in v0.2」 | 「ten conformance vectors」 | **15 組**（PR #2 把向量從 13 組增為 15 組） | ROADMAP 目前寫「thirteen」，**已再次過時**；本卡範圍不含 ROADMAP.md，待指示 |
 | D6 | README Quickstart | `auditrail verify examples/demo_ledger.jsonl` 暗示檔案在 repo 內 | 這些檔案由 demo 產生，且被 `.gitignore` 的 `*.jsonl` 排除，新 clone 沒有 | 已改文件（註明先跑 demo） |
 | D7 | SECURITY 開頭 | 「Every claim in the 'does' column has a test」 | 絕大多數成立，但 H3（背景心跳）、H4（記錄者週期迴圈）、H5（真的獨立行程）、V10（真的 push）只被部分測試或沒被測 | **不改 SECURITY 措辭**——這是需要你決定的主張；已在第 3 節列出缺口，建議補測試而不是削弱文字 |
 | D8 | `examples/logistics_sim/scenarios.py:193` | 「not in v0.1」 | 應為 v0.2 | 程式碼字串，未動 |
-| D9 | README Status | 「227 Python tests」 | 數字正確 | 無需處理 |
+| D9 | README Status | 「253 Python tests」 | 數字正確（PR #2 已更新） | 無需處理 |
 
 ## 7. 本次變更（git diff 只含文件）
 
@@ -233,7 +247,7 @@ gh repo edit x91652-pixel/auditrail --description "Verifiable evidence layer for
 cd verifier && cargo build --release --locked && cd ..
 pytest -q -rs
 
-# 不含 Rust 比對的情形：先把 verifier/target/release/auditrail-verify(.exe) 移走再跑，應得 221 passed, 6 skipped
+# 不含 Rust 比對的情形：先把 verifier/target/release/auditrail-verify(.exe) 移走再跑，應得 247 passed, 6 skipped
 
 # Rust
 cd verifier  && cargo test --locked --release
@@ -261,7 +275,7 @@ git diff --stat
 
 ## 9. 這份盤點沒有證明的事
 
-- 沒有證明 `release.yml` 能在 GitHub 上成功（macOS/Linux 步驟、出處證明都沒跑過）。
+- 沒有證明 `release.yml` 能在 GitHub 上成功：PR #3 已合併，但 `gh run list --workflow release.yml` 沒有任何執行紀錄（合併前的 CI 不會跑 release 流程）。
 - 沒有證明跨機器可重現建置。
 - Intel macOS 執行檔沒有被執行過。
 - Linux / macOS 上的檔案鎖（`fcntl`）、`GitSink` 真實 push 路徑沒有被本次環境測到。
