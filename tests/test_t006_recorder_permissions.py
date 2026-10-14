@@ -82,6 +82,8 @@ def test_d4_serve_refuses_to_start_with_a_loose_key(tmp_path, capsys, monkeypatc
     out = capsys.readouterr().out
     assert code != 0
     assert "REFUSING TO START" in out and "--allow-loose-permissions" in out
+    # for the right reason: the key IS open to others, not "the check could not run" (both refuse)
+    assert "open to other accounts" in out and "could not run" not in out, out
     assert not (tmp_path / "l.jsonl").exists(), "nothing may be written before the refusal"
 
 
@@ -130,7 +132,7 @@ def test_d4_the_flag_downgrades_the_refusal_to_a_warning_and_the_recorder_runs(t
     try:
         ok, seen = _read_until(proc, lines, "listening on")
         assert ok, "".join(seen)
-        assert any("[WARN]" in x and "loose" in x.lower() for x in seen), "".join(seen)
+        assert any("[WARN]" in x and "loose permissions accepted" in x for x in seen), "".join(seen)
     finally:
         proc.terminate()
         proc.wait(timeout=20)
@@ -164,6 +166,7 @@ def test_d4_a_loose_ledger_is_refused_too(tmp_path, capsys, monkeypatch):
     code = serve(make_args(tmp_path, key))
     out = capsys.readouterr().out
     assert code != 0 and "REFUSING TO START" in out and "ledger" in out
+    assert "open to other accounts" in out and "could not run" not in out, out
 
 
 def test_d4_a_missing_file_is_reported_but_does_not_block_start(tmp_path, capsys, monkeypatch):

@@ -131,6 +131,7 @@ def test_d8_2_an_anchors_file_others_can_write_is_refused_and_the_flag_downgrade
     code = refused(tmp_path, key, anchors=anchors)
     out = capsys.readouterr().out
     assert code == 2 and "REFUSING TO START" in out and "anchors" in out
+    assert "open to other accounts" in out and "could not run" not in out, out  # loose, not merely unchecked
     assert not started
     with pytest.raises(KeyboardInterrupt):
         recorder.serve(args(tmp_path, key, anchors=anchors, allow=True))
