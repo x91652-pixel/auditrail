@@ -1,10 +1,12 @@
 from .ledger import Ledger, EvidenceRecord
-from .policy import PolicyEngine, SessionState, Decision
+from .policy import PolicyEngine, SessionState, Decision, UnclassifiedToolWarning
 from .sandbox import Guard, ToolDenied
 from .agent_bridge import (
     AgentMessage,
     ReplayGuard,
+    ReplayStore,
     SignatureError,
+    SqliteReplayGuard,
     make_receipt,
     receive_envelope,
     send_envelope,
@@ -30,6 +32,9 @@ __all__ = [
     "sign_message",
     "verify_message",
     "ReplayGuard",
+    "ReplayStore",
+    "SqliteReplayGuard",
+    "UnclassifiedToolWarning",
     "SignatureError",
     "AgentMessage",
     "send_envelope",

@@ -110,9 +110,10 @@ def test_both_verifiers_reject_a_forged_non_hash_even_when_it_is_correctly_hashe
     forged = tmp_path / "forged.jsonl"
     forged.write_text("".join(_canonical(r) + "\n" for r in recs), encoding="utf-8")
     assert verify_all(forged)["status"] == "MALFORMED_RECORD"
-    if BINARY is not None:
-        out = subprocess.run([str(BINARY), str(forged), "--json"], capture_output=True, text=True, encoding="utf-8")
-        assert json.loads(out.stdout)["status"] == "MALFORMED_RECORD"
+    if BINARY is None:
+        pytest.skip("Rust verifier not built; the Python half above passed, the Rust half did not run")
+    out = subprocess.run([str(BINARY), str(forged), "--json"], capture_output=True, text=True, encoding="utf-8")
+    assert json.loads(out.stdout)["status"] == "MALFORMED_RECORD"
 
 
 LEGACY = ROOT / "tests" / "fixtures" / "legacy_v01_ledger.jsonl"  # written by the real v0.1 code
@@ -124,9 +125,10 @@ def test_a_genuine_v01_ledger_is_not_called_tampered(tmp_path):
     assert b'"format"' not in LEGACY.read_bytes() and b'"duration_ms":0.0' in LEGACY.read_bytes()
     res = verify_all(LEGACY)
     assert res["status"] == "LEGACY_FORMAT" and "--legacy-v01" in res["detail"]
-    if BINARY is not None:
-        out = subprocess.run([str(BINARY), str(LEGACY), "--json"], capture_output=True, text=True, encoding="utf-8")
-        assert json.loads(out.stdout)["status"] == "LEGACY_FORMAT"
+    if BINARY is None:
+        pytest.skip("Rust verifier not built; the Python half above passed, the Rust half did not run")
+    out = subprocess.run([str(BINARY), str(LEGACY), "--json"], capture_output=True, text=True, encoding="utf-8")
+    assert json.loads(out.stdout)["status"] == "LEGACY_FORMAT"
 
 
 def test_legacy_option_checks_the_old_hash_chain_and_says_how_weak_that_is(tmp_path):

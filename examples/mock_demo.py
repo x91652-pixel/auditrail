@@ -62,7 +62,7 @@ def run_demo() -> int:
     def read_resume(candidate_id: str) -> dict:
         return RESUMES[candidate_id]
 
-    @guard.guarded_tool("score_candidate", categories=[])
+    @guard.guarded_tool("score_candidate", categories=["internal"])
     def score_candidate(resume: dict) -> int:
         return min(100, resume["years_experience"] * 12)
 

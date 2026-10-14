@@ -23,6 +23,7 @@ process memory only -- the agent could still read the key file from disk.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -35,6 +36,43 @@ from typing import Any, Optional
 
 from .keys import Signer
 from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, call_fields
+
+
+def _token_matches(supplied: Any, expected: str) -> bool:
+    """Constant-time token check.
+
+    Both sides are hashed first, so the comparison is over two equal-length byte
+    strings whatever the token's length or characters. (hmac.compare_digest on two
+    str objects raises for non-ASCII text, which would reject a correct token.)
+    A token that is not a string is simply wrong.
+    """
+    if not isinstance(supplied, str):
+        return False
+    a = hashlib.sha256(supplied.encode("utf-8", "surrogatepass")).digest()
+    b = hashlib.sha256(expected.encode("utf-8", "surrogatepass")).digest()
+    return hmac.compare_digest(a, b)
+
+
+def _permission_findings_for_start(key_path, ledger_path, anchors_path=None) -> list:
+    """Findings about files the recorder depends on being open to other local accounts.
+
+    The recorder listens on a loopback TCP port; there is no socket file. The key
+    must be private, the ledger and anchors must not be writable by others. Files that
+    do not exist yet (a new ledger) are skipped; a *key* that cannot be checked is
+    reported as "unchecked".
+    """
+    from ._perms import Finding, permission_findings
+
+    out = [Finding(f.kind, f"signing key {f.message}") for f in permission_findings(key_path, "secret")]
+    for label, path in (("ledger", ledger_path), ("anchors", anchors_path)):
+        if path and Path(path).exists():
+            out += [Finding(f.kind, f"{label} {f.message}") for f in permission_findings(path, "writable")]
+    return out
+
+
+def startup_permission_warnings(key_path, ledger_path, anchors_path=None) -> list[str]:
+    """The messages of _permission_findings_for_start (kept for callers that only print)."""
+    return [f.message for f in _permission_findings_for_start(key_path, ledger_path, anchors_path)]
 
 
 class RecorderService:
@@ -95,7 +133,7 @@ class RecorderService:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     def _handle(self, req: dict) -> dict:
-        if self.token is not None and not hmac.compare_digest(str(req.get("token", "")), self.token):
+        if self.token is not None and not _token_matches(req.get("token"), self.token):
             return {"ok": False, "error": "bad or missing token"}
         op = req.get("op")
         if op not in ("call", "event"):
@@ -246,6 +284,31 @@ def serve(args) -> int:
     from .anchor import FileSink, GitSink
     from .policy import PolicyEngine
 
+    findings = _permission_findings_for_start(args.key, args.ledger, args.anchors)
+    loose = [f for f in findings if f.kind == "loose"]
+    unchecked = [f for f in findings if f.kind == "unchecked"]
+    for f in findings:
+        if f.kind == "missing":  # a key that is absent fails below with its own error; a new ledger is created
+            print(f"[RECORDER][WARN] {f.message}", flush=True)
+    allow = getattr(args, "allow_loose_permissions", False)
+    if (loose or unchecked) and not allow:
+        for f in loose:
+            print(f"[RECORDER][ERROR] {f.message}", flush=True)
+        for f in unchecked:
+            print(f"[RECORDER][ERROR] {f.message}", flush=True)
+        why = []
+        if loose:
+            why.append("files the recorder depends on are open to other accounts")
+        if unchecked:
+            why.append("the permission check could not run, and an unknown is treated as unsafe")
+        print(f"[RECORDER] REFUSING TO START: {'; '.join(why)}. Fix the cause, or start anyway with "
+              "--allow-loose-permissions (loose permissions then become warnings, and an unchecked file is "
+              "reported as NOT CHECKED).", flush=True)
+        return 2
+    for f in loose:
+        print(f"[RECORDER][WARN] loose permissions accepted (--allow-loose-permissions): {f.message}", flush=True)
+    for f in unchecked:
+        print(f"[RECORDER][WARN] NOT CHECKED (accepted with --allow-loose-permissions): {f.message}", flush=True)
     signer = Signer.from_file(args.key)
     ledger = Ledger(args.ledger, signer=signer)
     policy_version, policy_hash = "", None  # no policy file: heartbeats say "unknown" rather than inventing a hash
@@ -258,6 +321,12 @@ def serve(args) -> int:
     elif args.witness_file:
         sink = FileSink(args.witness_file)
     token = os.environ.get(args.token_env) if args.token_env else None
+    if token == "":
+        print(f"[RECORDER][WARN] {args.token_env} is set but empty; running WITHOUT a token", flush=True)
+        token = None
+    if token is None:
+        print("[RECORDER][WARN] no token: any local process that can reach the port can write to the ledger. "
+              "Set the token environment variable.", flush=True)
     anchor_every = args.anchor_every if args.anchor_every is not None else (300 if args.anchors else 0)
     svc = RecorderService(
         ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,
@@ -278,7 +347,10 @@ def serve(args) -> int:
             signal.signal(getattr(signal, sig), _term)
     try:
         while True:
-            time.sleep(3600)
+            # Short sleeps, not one long one: on Windows a signal handler only runs when the main thread
+            # comes back to the interpreter, and time.sleep(3600) is woken by Ctrl+C but not by Ctrl+Break
+            # or a console close, so the shutdown path (final heartbeat and anchor) was never reached.
+            time.sleep(0.5)
     except KeyboardInterrupt:
         svc.stop()
         print("[RECORDER] stopped; final heartbeat and anchor written", flush=True)

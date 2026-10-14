@@ -66,9 +66,10 @@ already use.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up.
-- **Independent verifier.** `verifier/` is a separate Rust program, written from the
+- **Independent implementation of the verifier.** `verifier/` is a separate Rust program, written from the
   [public format spec](docs/spec/evidence-format-v2.md) and tested against the same
-  conformance vectors as the Python code. One offline binary, no network.
+  conformance vectors as the Python code. One offline binary, no network. It was written by the
+  same author as the Python code, so it checks that the two agree, not yet that the format is right.
 - **Lethal-trifecta policy by workflow.** A call that would complete
   data-access + untrusted-input + external-comm is refused *before it runs*, counted
   across a whole workflow (shared `trace_id`, or agents linked by a signed message
@@ -83,6 +84,39 @@ What it deliberately does **not** do -- detect prompt injection, prove that
 unwrapped tools stayed quiet, protect you if the recorder key is stolen, or certify
 compliance -- is in [SECURITY.md](SECURITY.md). Read that before deciding whether
 it fits your threat model.
+
+## Stricter modes and behavior changes
+
+```python
+policy = PolicyEngine.from_yaml("policies/example_policy.yaml", strict=True)
+guard = Guard(policy, ledger)           # a wrapped tool with no category is refused and recorded as `unclassified_tool`
+replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by every process on this host
+```
+
+- `strict` (or `strict_classification: true` in the policy): a tool with no category is refused. Without it, a warning
+  is printed when such a tool is wrapped. Harmless tools say so with an explicit label such as `internal`.
+- `state_change` is a category for actions that change an external system without necessarily communicating outward.
+  With `enforce_state_change_after_untrusted: true` per agent, such a tool is refused once its workflow has read
+  untrusted input, unless it is listed in `state_change_allowed_tools`.
+- `SqliteReplayGuard` replaces the in-memory `ReplayGuard` when several agent processes on one host receive messages.
+- `auditrail recorder` warns at startup about a missing or empty token. **Behavior change:** it now also *refuses to start*
+  (exit code 2) when its signing key is readable by other accounts, its ledger/anchors are writable by them, or the
+  permission check itself could not run (an unknown is treated as unsafe). Pass `--allow-loose-permissions` to get
+  warnings (`NOT CHECKED` for the unchecked case) and start anyway. The Windows check reads the ACL for the broad
+  groups only, so passing it is not proof the key is private.
+- **Behavior change:** `internal` cannot be combined with another category on one tool. Such a policy fails to load
+  (`PolicyError`, naming the tool and the categories), and so does a call-site label that contradicts the policy. Remove one
+  of the two labels; there is no switch to allow the combination.
+- **Behavior change:** a category must be a built-in name (`data_access`, `untrusted_input`, `external_comm`,
+  `state_change`, `internal`, `agent_to_agent`) or be declared once under a top-level `custom_categories:` list in
+  the policy (lower_snake_case). `State_Change`, ` internal`, `state-change` and typos raise `PolicyError` with the
+  closest known name, in every mode. Declaring your own names is the way back; there is no switch that skips the
+  check.
+- **Behavior change:** the same tool labelled differently by two agent sections raises `PolicyError` when it is
+  wrapped; give it one label set.
+
+These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
+see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
 
 ## Evidence the operator cannot quietly rewrite
 
@@ -105,10 +139,15 @@ guard.start_heartbeats()             # the agent's own "still wrapped" signal
 ```
 
 ```bash
-# 3. anyone, offline, with only the PUBLIC key and a witness copy:
+# 3. anyone, offline, with only the PUBLIC key and a witness copy.
+#    auditrail-verify is the standalone Rust binary (build it or download it, see below):
 auditrail-verify evidence.jsonl --pubkey keys/recorder.pub --witness witness-copy.jsonl --max-gap 120
-# (or `auditrail verify ...` with the same flags in Python)
+#    the Python CLI does the same; note the flag is --witness-file there:
+auditrail verify evidence.jsonl --pubkey keys/recorder.pub --witness-file witness-copy.jsonl --max-gap 120
 ```
+
+`pip install` installs only the `auditrail` command. `auditrail-verify` comes from `cd verifier && cargo build --release`
+or from a release download.
 
 The verifier prints `OK` only with a list of what it did **not** check (no key
 given, no witness, no heartbeat limit, records after the last anchor).
@@ -142,7 +181,7 @@ Intel macOS binary is cross-compiled and is not executed in CI.
 the whole ledger, or cuts off its tail, still passes it. Anchoring periodically
 records the chain head (sequence number and hash, no tool arguments or results)
 and publishes it to a witness outside the ledger owner's sole control. The full
-specification is in `auditrail-docs/錨定協定.md`; the signed (v2) form is in [docs/spec/evidence-format-v2.md](docs/spec/evidence-format-v2.md).
+current specification, including the signed (v2) anchors, is [docs/spec/evidence-format-v2.md](docs/spec/evidence-format-v2.md).
 
 ```bash
 # record the current head; with --push, also push the witness commit
@@ -151,8 +190,11 @@ auditrail verify ledger.jsonl --anchors anchors.jsonl --git-repo ../witness
 ```
 
 `verify --anchors` reports one of `OK`, `TAMPERED_LEDGER`, `TAMPERED_ANCHOR`,
-`REWRITTEN`, `TRUNCATED`, `SINK_MISMATCH`, or `SINK_UNREACHABLE`, plus how many
-records after the last anchor are not covered.
+`UNSIGNED_ANCHOR`, `UNKNOWN_KEY`, `BAD_SIGNATURE`, `REWRITTEN`, `TRUNCATED`,
+`SINK_MISMATCH`, or `SINK_UNREACHABLE`, plus how many records after the last anchor
+are not covered. (`SINK_*` exist only in the Python verifier; the Rust one reads a
+witness file and has no sinks. The full status list, including the record- and
+heartbeat-level ones, is in the format spec.)
 
 What anchoring proves: records up to the last anchor were not rewritten, deleted,
 or reordered, provided that anchor has been stored outside the owner's control.
@@ -183,7 +225,8 @@ python -m examples.mock_demo
 auditrail demo
 ```
 
-Verify any ledger's integrity independently:
+Verify any ledger's integrity independently (the demo writes `examples/demo_ledger.jsonl`;
+`*.jsonl` is git-ignored, so the file exists only after you have run the demo):
 
 ```bash
 auditrail verify examples/demo_ledger.jsonl
@@ -248,7 +291,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 253 Python tests are deterministic and require no network access or API key
+All 531 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and

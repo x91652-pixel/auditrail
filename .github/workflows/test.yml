@@ -53,11 +53,11 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python docs/spec/vectors/generate.py
       - run: git diff --exit-code -- docs/spec/vectors
-      - run: cargo test
+      - run: cargo test --locked
         working-directory: verifier
-      - run: cargo build --release
+      - run: cargo build --release --locked
         working-directory: verifier
-      - run: pytest tests/test_vectors.py tests/test_rust_verifier.py tests/test_reader_agreement.py -v
+      - run: pytest tests/test_vectors.py tests/test_rust_verifier.py tests/test_reader_agreement.py tests/test_policy_hash.py -v
       # property-based differential testing: Python vs Rust on mutated and garbage input
       - run: pytest tests/test_fuzz.py -v
         env:

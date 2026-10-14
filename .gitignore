@@ -26,3 +26,9 @@ examples/demo_witness/
 target/
 .hypothesis/
 !Cargo.lock
+
+# Signing keys: README tells people to run keygen inside the repo; never commit a private key.
+# Note keys/ also hides the .pub next to the key; publish a public key from somewhere else.
+# Already tracked files (the conformance vectors' recorder.pub) are not affected.
+*.key
+keys/

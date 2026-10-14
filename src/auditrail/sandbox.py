@@ -44,11 +44,12 @@ import subprocess
 import sys as _sys
 import threading
 import time
+import warnings
 from typing import Any, Callable, Iterable, Optional
 
 RESULT_MARKER = "@@auditrail-result@@"  # must match _isolate_worker.RESULT_MARKER (not imported: see runpy)
 from .ledger import Ledger
-from .policy import Decision, PolicyEngine, SessionState
+from .policy import Decision, PolicyEngine, SessionState, UnclassifiedToolWarning, call_site_list
 
 # Variables a Python subprocess needs to start and behave normally. Nothing else
 # is inherited unless named in env_passthrough.
@@ -287,9 +288,18 @@ class Guard:
         loop that should see a structured refusal rather than a stack trace.
         env_passthrough: extra environment variable names an isolated tool may see.
         """
-        categories = list(categories)
+        categories = call_site_list(categories, f"categories of tool '{name}' at the call site")
         env_passthrough = tuple(env_passthrough)
+        self.policy.check_call_site_labels(name, categories)  # PolicyError now, not a surprise at call time
         self.tools.add(name)
+        if not categories and not self.policy.strict and not self.policy.classified_by_policy(name):
+            warnings.warn(
+                f"tool '{name}' is wrapped with no category (none at the call site, none in the policy). "
+                "The trifecta rule cannot see it, so it is allowed in this mode. Label it, or construct "
+                "PolicyEngine(..., strict=True) to refuse unclassified tools.",
+                UnclassifiedToolWarning,
+                stacklevel=2,
+            )
 
         def deco(fn: Callable) -> Callable:
             if isolate:

@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import time
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -25,6 +26,7 @@ from auditrail import Guard, KeyRegistry, Ledger, PolicyEngine, Signer, ToolDeni
 from auditrail.agent_bridge import ReplayGuard, SignatureError, _mac, sign_message
 from auditrail.anchor import FileSink, anchor_ledger
 from auditrail.ledger import GENESIS_HASH, _canonical, record_hash
+from auditrail.policy import UnclassifiedToolWarning
 from auditrail.verifier import verify_all
 
 from . import company
@@ -93,7 +95,11 @@ def run_simulation(ledger_path: Path) -> dict:
     ledger = Ledger(ledger_path, signer=recorder_key)
     guard = Guard(policy, ledger)
     replay = ReplayGuard()
-    tools = company.build(guard, BRIDGE_SECRET, replay)
+    with warnings.catch_warnings(record=True) as caught:  # the tools the default mode cannot see
+        warnings.simplefilter("always", UnclassifiedToolWarning)
+        tools = company.build(guard, BRIDGE_SECRET, replay)
+    unclassified = sorted({str(w.message).split("'")[1] for w in caught
+                           if issubclass(w.category, UnclassifiedToolWarning)})
 
     legit: list[Result] = []
     attacks: list[Result] = []
@@ -190,7 +196,8 @@ def run_simulation(ledger_path: Path) -> dict:
            "internal write action carries no external-comm category, so the trifecta rule does not fire",
            "ALLOWED", a_carrier_reroute, owasp="ASI02 Tool Misuse",
            known_gap="Write actions with no external channel are not blocked by the trifecta rule. "
-                     "Mitigation needs a human-approval policy (trifecta_exempt / approval gate), not in v0.1.")
+                     "Opt-in mitigation: label the tool state_change and set enforce_state_change_after_untrusted "
+                     "(see the strict-policy attack below). The default policy is unchanged.")
 
     def a_privilege_escalation():
         s = sess("customer-service-agent")
@@ -326,6 +333,78 @@ def run_simulation(ledger_path: Path) -> dict:
            "BLOCKED", a_split_across_agents, owasp="ASI02 / ASI07",
            notes=["v0.2: the signed envelope carries A's categories, so B's workflow inherits them"])
 
+    # ------------------------------------- phase 1: the same gaps, strict policy
+    # A second Guard with the phase-1 options writes to the same ledger. Results are
+    # whatever the calls actually did; nothing is labelled "blocked" in advance.
+    strict_policy = PolicyEngine(company.STRICT_POLICY)
+    strict_guard = Guard(strict_policy, ledger)
+    strict_tools = company.build(strict_guard, BRIDGE_SECRET, replay)
+    n_attacks_before = len(attacks)
+
+    def strict_sess(agent: str):
+        return strict_guard.session(agent)
+
+    s = strict_sess("finance-agent")
+    legit_case("strict policy: read invoice (data), then refund (state change), no untrusted input",
+               lambda: (strict_tools["read_invoice"](s, "INV-7"), strict_tools["issue_refund"](s, "INV-7", 100)))
+
+    s = strict_sess("dispatcher-agent")
+    legit_case("strict policy: carrier status (untrusted) then shipment lookup (data): two categories only",
+               lambda: (strict_tools["read_carrier_status"](s, "SHP-1001"),
+                        strict_tools["lookup_shipment"](s, "SHP-1001")))
+
+    def a_strict_reroute():
+        s = strict_sess("dispatcher-agent")
+        strict_tools["read_carrier_status"](s, "SHP-1002")
+        before = t.SHIPMENTS["SHP-1002"]["hub"]
+        out = _attempt(strict_tools["reroute_shipment"], s, "SHP-1002", "TXG-HUB-EVIL")
+        after = t.SHIPMENTS["SHP-1002"]["hub"]
+        return out[0], f"{out[1]} | hub {before} -> {after}"
+
+    attack("Same reroute as above, strict policy with the state_change rule",
+           "write action labelled state_change after untrusted input in the same workflow",
+           "BLOCKED", a_strict_reroute, owasp="ASI02 Tool Misuse",
+           notes=["opt-in: needs enforce_state_change_after_untrusted and a state_change label on the tool"])
+
+    def a_unlabelled_tool():
+        def export_customer_list(customer_filter: str) -> list:
+            return [{"customer": "C-001"}, {"customer": "C-003"}]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UnclassifiedToolWarning)
+            lax = guard.guarded_tool("export_customer_list")(export_customer_list)
+            strict = strict_guard.guarded_tool("export_customer_list")(export_customer_list)
+        for engine in (policy, strict_policy):  # the tool is allow-listed for the agent in both
+            engine.agents["customer-service-agent"]["allowed_tools"].append("export_customer_list")
+        default_result = _attempt(lax, sess("customer-service-agent"), "all")
+        strict_result = _attempt(strict, strict_sess("customer-service-agent"), "all")
+        return strict_result[0], (f"default mode: {default_result[0]}; "
+                                  f"strict mode: {strict_result[0]} ({strict_result[1][:90]})")
+
+    attack("A newly added tool nobody labelled",
+           "a developer wraps a new data export and forgets the category",
+           "BLOCKED", a_unlabelled_tool, owasp="ASI02 / ASI04 (partial)",
+           notes=["default mode runs it and only warns at wrap time; strict mode refuses it and records why"])
+
+    def a_mislabelled_tool():
+        def close_account(customer_id: str) -> dict:
+            return {"closed": customer_id}
+
+        mislabelled = strict_guard.guarded_tool("close_account", categories=["internal"])(close_account)
+        strict_policy.agents["dispatcher-agent"]["allowed_tools"].append("close_account")
+        s = strict_sess("dispatcher-agent")
+        strict_tools["read_carrier_status"](s, "SHP-666")  # untrusted input first
+        return _attempt(mislabelled, s, "C-001")
+
+    attack("A state-changing tool labelled 'internal'",
+           "the operator's own label is wrong; the engine takes labels at face value",
+           "ALLOWED", a_mislabelled_tool, owasp="ASI02 Tool Misuse",
+           known_gap="Labels are claims by whoever wrote the policy or the decorator. Strict mode makes a missing "
+                     "label a refusal; it cannot tell that 'internal' is false. Review labels like code.")
+
+    strict_results = attacks[n_attacks_before:]
+    del attacks[n_attacks_before:]  # re-appended after the ledger checks, so earlier attack numbers stay put
+
     # ----------------------------------------------------- ledger integrity
     ok, bad_seq = ledger.verify(public_keys=trusted)
     records = list(ledger)
@@ -368,9 +447,12 @@ def run_simulation(ledger_path: Path) -> dict:
            "drop the last records after their head was published to a witness",
            "DETECTED", witnessed_truncation, owasp="Evidence integrity (v0.2 anchors)")
 
+    attacks.extend(strict_results)
+
     # --------------------------------------------------------------- ledger
 
     return {
+        "unclassified_in_default_mode": unclassified,
         "legit": legit,
         "attacks": attacks,
         "ledger_path": str(ledger_path),

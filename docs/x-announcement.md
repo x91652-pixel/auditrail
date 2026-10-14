@@ -1,3 +1,5 @@
+> **Note (2026-10-13):** this draft describes v0.1. The project is now v0.2 (signed records, anchors, independent verifier); rewrite the claims before posting anything.
+
 # Draft X / Twitter posts (NOT posted — for your review only)
 
 Read the note at the bottom before posting anything. Replace every

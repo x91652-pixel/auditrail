@@ -55,6 +55,8 @@ def main() -> int:
     print(f"  決策統計：{report['decisions']}")
     print(f"  實際寄出的外部訊息：{report['outbox_count']} 則")
     print(f"  日誌位置：{report['ledger_path']}")
+    unc = report["unclassified_in_default_mode"]
+    print(f"  預設模式下沒有任何類別的工具（strict 模式會拒絕它們）：{len(unc)} 個 {unc}")
 
     failed = [r for r in legit + attacks if not r.passed]
     if failed:

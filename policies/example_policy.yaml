@@ -17,6 +17,23 @@
 #                       system another party can read)
 #   agent_to_agent     - invokes another agent; routed through
 #                       agent_bridge's signed-message verification
+#   state_change       - changes the state of an external system without
+#                       necessarily communicating outward (refund, reroute,
+#                       delete). Opt-in rule below.
+#   internal           - an explicit "touches none of the above" label. Strict
+#                       mode refuses a tool with NO category, and an empty list
+#                       is not a category; this is how a harmless tool says so.
+#
+# Category names are checked. A name must be one of the built-ins above, or be declared once at the
+# top level of this file:
+#   custom_categories: [team_billing]      (lower_snake_case)
+# so State_Change, ' internal', state-change and typos are errors, not new categories.
+#
+# Optional, off by default (existing policies evaluate exactly as before):
+#   strict_classification: true            (top level) refuse unlabelled tools
+#   enforce_state_change_after_untrusted: true     (per agent) a state_change
+#       tool is refused once the workflow has touched untrusted_input
+#   state_change_allowed_tools: [tool, ...]        (per agent) explicit exceptions
 
 version: "policy-v1-2026Q4"
 
@@ -25,7 +42,7 @@ agents:
     allowed_tools: [read_resume, score_candidate, write_result]
     tool_categories:
       read_resume: [data_access]
-      score_candidate: []
+      score_candidate: [internal]
       write_result: [external_comm]
     enforce_lethal_trifecta: true
     trifecta_exempt_tools: []
