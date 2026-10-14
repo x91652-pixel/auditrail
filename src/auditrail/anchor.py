@@ -125,8 +125,9 @@ def _check_anchor_line(rec: Any, public_keys: Optional[dict[str, str]]) -> Optio
             return "UNKNOWN_KEY", f"anchor is signed by key_id={rec['key_id']}, which is not in the trusted keys"
         if public_keys is not None and alg not in supported_algorithms():
             return ("UNSUPPORTED_ALGORITHM",
-                    f"anchor is signed with algorithm {alg!r}, which this verifier does not implement; "
-                    "its signature was not checked (this is not evidence of tampering)")
+                    f"anchor names signature algorithm {alg!r}, which this verifier does not implement, so its "
+                    "signature could not be checked. That may be a newer algorithm, or someone may have changed the "
+                    "field. Inconclusive, not OK; it can be provoked by someone without the key")
         if pub is not None and key_algorithm(public_keys, rec["key_id"]) != alg:
             return "BAD_SIGNATURE", f"anchor names algorithm {alg!r} but the trusted key is of another type (algorithm mismatch)"
         if pub is not None and not verify_with(alg, pub, TAG_ANCHOR, rec["anchor_hash"].encode("ascii"), rec.get("sig", "")):
@@ -150,8 +151,12 @@ def _anchor_lines(path: Path) -> tuple[list[tuple[int, dict]], Optional[dict]]:
     return out, None
 
 
-def _parse_anchors(path: Path, public_keys: Optional[dict[str, str]] = None) -> tuple[list[dict], Optional[dict]]:
-    """Return (anchors, problem). problem is set when the anchor chain (protocol §6.2) breaks."""
+def _parse_anchors(path: Path, public_keys: Optional[dict[str, str]] = None,
+                   deferred: Optional[list] = None) -> tuple[list[dict], Optional[dict]]:
+    """Return (anchors, problem). problem is set when the anchor chain (protocol §6.2) breaks.
+
+    If `deferred` is a list, a line whose algorithm this verifier cannot check is appended to it and reading
+    goes on (so a later, definite problem is not hidden); otherwise it is the problem, as before."""
     if not path.exists():
         return [], None
     anchors: list[dict] = []
@@ -159,6 +164,9 @@ def _parse_anchors(path: Path, public_keys: Optional[dict[str, str]] = None) -> 
     parsed, problem = _anchor_lines(path)
     for lineno, rec in parsed:
         bad = _check_anchor_line(rec, public_keys)
+        if bad is not None and bad[0] == "UNSUPPORTED_ALGORITHM" and deferred is not None:
+            deferred.append({"status": bad[0], "line": lineno, "detail": bad[1]})
+            bad = None
         if bad is not None:
             return anchors, {"status": bad[0], "line": lineno, "detail": bad[1]}
         if rec["prev_anchor"] != prev:
@@ -227,23 +235,32 @@ def verify_anchors(
     anchors_path: str | Path,
     sinks: Optional[dict] = None,
     public_keys: Optional[dict[str, str]] = None,
+    records: Optional[list[dict]] = None,
 ) -> dict:
     """Run the five checks of protocol §6 and report the first failure, or OK with coverage.
 
-    With public_keys, the ledger records and every anchor must also carry valid signatures.
+    With public_keys, the ledger records and every anchor must also carry valid signatures. `records`, when
+    given, are records the caller has already checked (verify_all does); the chain is then not re-read.
+    A line signed with an algorithm this verifier cannot check does not stop the other checks: the result is
+    UNSUPPORTED_ALGORITHM only if nothing definite (REWRITTEN, TRUNCATED, SINK_MISMATCH, ...) is found.
     """
     sinks = sinks or {}
     ledger_path = Path(ledger_path)
-    records: list[dict] = []
-    if ledger_path.exists():
+    if records is not None:
+        pass
+    elif ledger_path.exists():
+        records = []
         ledger = Ledger(ledger_path)
         ok, bad_seq = ledger.verify(public_keys=public_keys)  # §6.1
         if not ok:
             return _report("TAMPERED_LEDGER", f"ledger hash chain breaks at seq={bad_seq}", bad_seq=bad_seq)
         records = list(ledger)
+    if records is None:
+        records = []
     max_seq = records[-1]["seq"] if records else None
 
-    anchors, problem = _parse_anchors(Path(anchors_path), public_keys)  # §6.2
+    deferred: list = []
+    anchors, problem = _parse_anchors(Path(anchors_path), public_keys, deferred)  # §6.2
     if problem is not None:
         return _report(problem["status"], problem["detail"], line=problem["line"])
 
@@ -271,12 +288,16 @@ def verify_anchors(
 
     anchored_upto = anchors[-1]["seq"] if anchors else None
     tail = len(records) - (anchored_upto + 1) if anchors else len(records)
+    unchecked = sorted({a["sig_alg"] for a in anchors if a.get("sig_alg") not in (None, *supported_algorithms())})
+    if deferred:
+        return _report(deferred[0]["status"], f"line {deferred[0]['line']}: {deferred[0]['detail']}",
+                       anchored_upto=anchored_upto, unanchored_tail=tail, unchecked_algorithms=unchecked)
     external = sum(1 for a in anchors if a.get("sink_ref"))
     detail = f"{len(anchors)} anchor(s) verified; {external} witnessed externally; {tail} record(s) after the last anchor are not covered"
-    return _report("OK", detail, anchored_upto=anchored_upto, unanchored_tail=tail)
+    return _report("OK", detail, anchored_upto=anchored_upto, unanchored_tail=tail, unchecked_algorithms=unchecked)
 
 
-def verify_witness_file(records: list[dict], witness_path: str | Path, public_keys: Optional[dict[str, str]] = None) -> dict:
+def verify_witness_file(records: list[dict], witness_path: str | Path, public_keys: Optional[dict[str, str]] = None) -> dict:  # noqa: E501
     """Check a copy of what a witness holds against the ledger, without the owner's anchors file.
 
     This is the check a third party runs: they kept (or fetched) the published
@@ -292,10 +313,17 @@ def verify_witness_file(records: list[dict], witness_path: str | Path, public_ke
     upto = None
     count = 0
     parsed, problem = _anchor_lines(path)
+    deferred: list = []
+    unchecked: set = set()
     for lineno, rec in parsed:
         bad = _check_anchor_line(rec, public_keys)
+        if bad is not None and bad[0] == "UNSUPPORTED_ALGORITHM":
+            deferred.append((lineno, bad[1]))  # still compared with the ledger below: REWRITTEN/TRUNCATED outrank it
+            bad = None
         if bad is not None:
             return _report(bad[0], f"witness file: {bad[1]}", line=lineno)
+        if rec.get("sig_alg") is not None and rec["sig_alg"] not in supported_algorithms():
+            unchecked.add(rec["sig_alg"])
         led = by_seq.get(rec["seq"])
         if led is None:
             return _report("TRUNCATED", f"ledger ends at seq={max_seq}, but the witness holds an anchor for seq={rec['seq']}",
@@ -308,7 +336,12 @@ def verify_witness_file(records: list[dict], witness_path: str | Path, public_ke
     if problem is not None:
         return _report("TAMPERED_ANCHOR", f"witness file: {problem['detail']}", line=problem["line"])
     tail = len(records) - (upto + 1) if upto is not None else len(records)
-    return _report("OK", f"{count} witnessed anchor(s) match the ledger", anchored_upto=upto, unanchored_tail=tail)
+    if deferred:
+        return _report("UNSUPPORTED_ALGORITHM", f"witness file: line {deferred[0][0]}: {deferred[0][1]}",
+                       anchored_upto=upto, unanchored_tail=tail, line=deferred[0][0],
+                       unchecked_algorithms=sorted(unchecked))
+    return _report("OK", f"{count} witnessed anchor(s) match the ledger", anchored_upto=upto, unanchored_tail=tail,
+                   unchecked_algorithms=sorted(unchecked))
 
 
 class FileSink:
