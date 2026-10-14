@@ -24,6 +24,11 @@
 #                       mode refuses a tool with NO category, and an empty list
 #                       is not a category; this is how a harmless tool says so.
 #
+# Category names are checked. A name must be one of the built-ins above, or be declared once at the
+# top level of this file:
+#   custom_categories: [team_billing]      (lower_snake_case)
+# so State_Change, ' internal', state-change and typos are errors, not new categories.
+#
 # Optional, off by default (existing policies evaluate exactly as before):
 #   strict_classification: true            (top level) refuse unlabelled tools
 #   enforce_state_change_after_untrusted: true     (per agent) a state_change

@@ -85,7 +85,7 @@ unwrapped tools stayed quiet, protect you if the recorder key is stolen, or cert
 compliance -- is in [SECURITY.md](SECURITY.md). Read that before deciding whether
 it fits your threat model.
 
-## Stricter modes (opt-in; defaults are unchanged)
+## Stricter modes and behavior changes
 
 ```python
 policy = PolicyEngine.from_yaml("policies/example_policy.yaml", strict=True)
@@ -99,13 +99,21 @@ replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by ev
   With `enforce_state_change_after_untrusted: true` per agent, such a tool is refused once its workflow has read
   untrusted input, unless it is listed in `state_change_allowed_tools`.
 - `SqliteReplayGuard` replaces the in-memory `ReplayGuard` when several agent processes on one host receive messages.
-- `auditrail recorder` warns at startup about a missing token. **Behavior change:** it now also *refuses to start*
-  (exit code 2) when its signing key is readable by other accounts, or its ledger/anchors are writable by them; pass
-  `--allow-loose-permissions` to get warnings instead. A check that could not run is reported as `NOT CHECKED` and does not
-  block. The Windows check reads the ACL for the broad groups only, so passing it is not proof the key is private.
+- `auditrail recorder` warns at startup about a missing or empty token. **Behavior change:** it now also *refuses to start*
+  (exit code 2) when its signing key is readable by other accounts, its ledger/anchors are writable by them, or the
+  permission check itself could not run (an unknown is treated as unsafe). Pass `--allow-loose-permissions` to get
+  warnings (`NOT CHECKED` for the unchecked case) and start anyway. The Windows check reads the ACL for the broad
+  groups only, so passing it is not proof the key is private.
 - **Behavior change:** `internal` cannot be combined with another category on one tool. Such a policy fails to load
   (`PolicyError`, naming the tool and the categories), and so does a call-site label that contradicts the policy. Remove one
   of the two labels; there is no switch to allow the combination.
+- **Behavior change:** a category must be a built-in name (`data_access`, `untrusted_input`, `external_comm`,
+  `state_change`, `internal`, `agent_to_agent`) or be declared once under a top-level `custom_categories:` list in
+  the policy (lower_snake_case). `State_Change`, ` internal`, `state-change` and typos raise `PolicyError` with the
+  closest known name, in every mode. Declaring your own names is the way back; there is no switch that skips the
+  check.
+- **Behavior change:** the same tool labelled differently by two agent sections raises `PolicyError` when it is
+  wrapped; give it one label set.
 
 These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
 see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
