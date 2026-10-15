@@ -19,7 +19,13 @@ def _sinks(git_repo: str | None) -> dict:
 def _keys(args: argparse.Namespace) -> dict | None:
     from .keys import load_public_keys
 
-    return load_public_keys(args.pubkey) if getattr(args, "pubkey", None) else None
+    if not getattr(args, "pubkey", None):
+        return None
+    try:
+        return load_public_keys(args.pubkey)
+    except (ValueError, OSError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 def cmd_verify(args: argparse.Namespace) -> int:

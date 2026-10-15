@@ -148,14 +148,31 @@ def key_algorithm(public_keys, key_id: str) -> str:
     return getattr(public_keys, "algorithms", {}).get(key_id, DEFAULT_ALG)
 
 
+def _public_key_problem(raw: bytes, exc: Exception) -> str:
+    """One line saying what is wrong with a .pub file: the rule, and a specific hint for the usual causes."""
+    rule = "a public key file must hold exactly 64 hexadecimal digits (32 bytes), optionally surrounded by whitespace"
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return f"{rule}; this file starts with a UTF-8 byte order mark: save it without BOM"
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")) or (len(raw) > 1 and b"\x00" in raw):
+        return f"{rule}; this file looks like UTF-16 (often from PowerShell's > redirection): write it as UTF-8 or ASCII"
+    try:
+        digits = raw.decode("utf-8").strip(_RUST_WHITESPACE)
+    except UnicodeDecodeError:
+        return f"{rule}; this file is not valid UTF-8 text"
+    if re.fullmatch(r"[0-9a-fA-F]+", digits) and len(digits) != 64:
+        return f"{rule}; found {len(digits)} hexadecimal digits"
+    return rule
+
+
 def load_public_keys(paths) -> dict[str, str]:
     """Read .pub files into {key_id: public_hex}. A malformed file raises ValueError."""
     keys: dict[str, str] = {}
     for p in paths or ():
+        raw = Path(p).read_bytes()
         try:
-            pub = parse_public_hex(Path(p).read_text(encoding="utf-8"))
+            pub = parse_public_hex(raw.decode("utf-8"))
         except ValueError as exc:  # includes UnicodeDecodeError
-            raise ValueError(f"{p}: {exc}") from exc
+            raise ValueError(f"{p}: {_public_key_problem(raw, exc)}") from exc
         keys[key_id_for(pub)] = pub
     return keys
 
