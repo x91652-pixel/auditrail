@@ -171,6 +171,127 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return run_demo()
 
 
+def _is_input(path: Path, inputs) -> bool:
+    """True if `path` names the same file as any input: the same path after resolving, or the same device and inode
+    (a hard link, a junction, a short or differently cased name all reach the same file)."""
+    import os
+
+    for q in inputs:
+        try:
+            if os.path.samefile(path, q):
+                return True
+        except OSError:
+            pass
+        if os.path.normcase(os.path.realpath(path)) == os.path.normcase(os.path.realpath(q)):
+            return True
+    return False
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from . import _strict
+    from .report import DEFAULT_MAX_ROWS, build_report, is_clean, render_html, render_json, render_md
+
+    ledger = Path(args.ledger_path)
+    if not ledger.is_file():
+        print(f"[ERROR] {args.ledger_path}: file not found (no report was produced)", file=sys.stderr)
+        return 2
+    if args.redact_salt is not None and not args.redact:
+        print("[ERROR] --redact-salt only has an effect together with --redact (no report was produced)", file=sys.stderr)
+        return 2
+    for name in ("max_gap", "max_rows"):
+        v = getattr(args, name)
+        if v is not None and v < 1:
+            print(f"[ERROR] --{name.replace('_', '-')} must be a positive integer (no report was produced)", file=sys.stderr)
+            return 2
+    stamp = None
+    if args.generated_at:
+        if args.generated_at == "now":
+            import time as _time
+
+            stamp = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        elif _strict.parse_ts(args.generated_at) is not None:
+            stamp = args.generated_at
+        else:
+            print("[ERROR] --generated-at must be 'now' or YYYY-MM-DDTHH:MM:SSZ", file=sys.stderr)
+            return 2
+    for p in [*(args.pubkey or []), args.anchors, args.witness_file, *(args.peer_ledger or [])]:
+        if p and not Path(p).is_file():
+            print(f"[ERROR] {p}: file not found (no report was produced)", file=sys.stderr)
+            return 2
+    try:
+        data = build_report(
+            ledger, public_key_paths=args.pubkey or (), anchors_path=args.anchors, witness_path=args.witness_file,
+            git_repo=args.git_repo, max_gap_s=args.max_gap, peer_ledgers=args.peer_ledger or (),
+            agents=args.agent or (), title=args.title, note=args.note, redact=args.redact, redact_salt=args.redact_salt,
+            generated_at=stamp,
+            max_rows=args.max_rows if args.max_rows is not None else DEFAULT_MAX_ROWS)
+    except (ValueError, OSError) as exc:
+        print(f"[ERROR] {exc} (no report was produced)", file=sys.stderr)
+        return 2
+    outputs = {"md": render_md, "html": render_html, "json": render_json}
+    formats = ["md", "html", "json"] if args.format == "all" else [args.format]
+    if args.out in (None, "-"):
+        if len(formats) != 1:
+            print("[ERROR] --format all needs --out PREFIX (it writes PREFIX.md, PREFIX.html, PREFIX.json)", file=sys.stderr)
+            return 2
+    # Everything is rendered and encoded, and every target checked, before anything is written: a failure leaves
+    # no partial report and exits 2 with one line.
+    try:
+        payload = {f: outputs[f](data).encode("utf-8") for f in formats}
+    except (UnicodeError, ValueError) as exc:
+        print(f"[ERROR] the report cannot be encoded as UTF-8: {exc} (no report was produced)", file=sys.stderr)
+        return 2
+    if args.out in (None, "-"):
+        # Bytes, not text mode: the same bytes on every platform (text mode would turn LF into CRLF on Windows).
+        raw = payload[formats[0]]
+        try:
+            out = getattr(sys.stdout, "buffer", None)
+            if out is not None:
+                out.write(raw)
+                out.flush()
+            else:
+                sys.stdout.write(raw.decode("utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"[ERROR] cannot write the report to standard output: {exc}", file=sys.stderr)
+            return 2
+        return 0 if is_clean(data) else 1
+    targets = {f: Path(args.out + "." + f) if args.format == "all" else Path(args.out) for f in formats}
+    inputs = [p for p in [args.ledger_path, *(args.pubkey or []), args.anchors, args.witness_file,
+                          *(args.peer_ledger or [])] if p]
+    for f, path in targets.items():
+        if _is_input(path, inputs):
+            print(f"[ERROR] {path}: is one of the input files (or another name for it); the evidence is never "
+                  "overwritten (no report was produced)", file=sys.stderr)
+            return 2
+        if path.is_dir():
+            print(f"[ERROR] {path}: is a directory (no report was produced)", file=sys.stderr)
+            return 2
+        if not path.parent.is_dir():
+            print(f"[ERROR] {path}: the parent directory does not exist or is not a directory "
+                  "(no report was produced)", file=sys.stderr)
+            return 2
+        if path.exists() and not args.force:
+            print(f"[ERROR] {path}: already exists; add --force to replace it (no report was produced)", file=sys.stderr)
+            return 2
+    written: list[tuple[Path, bool]] = []
+    try:
+        for f, path in targets.items():
+            existed = path.exists()
+            path.write_bytes(payload[f])
+            written.append((path, existed))
+            print(f"[REPORT] wrote {path}" + (" (replaced the existing file)" if existed else ""))
+    except OSError as exc:
+        for path, existed in written:
+            if not existed:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        print(f"[ERROR] cannot write the report: {exc}", file=sys.stderr)
+        return 2
+    return 0 if is_clean(data) else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="auditrail", description="Tamper-evident audit trails for AI agents.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -229,6 +350,28 @@ def build_parser() -> argparse.ArgumentParser:
                       "Use it when an agent's ledger may be empty.")
     p_rc.add_argument("--json", action="store_true")
     p_rc.set_defaults(func=cmd_reconcile)
+
+    p_rep = sub.add_parser("report", help="Write a readable report of what a verification found and did not examine.")
+    p_rep.add_argument("ledger_path")
+    p_rep.add_argument("--pubkey", action="append", help="Trusted recorder public key (.pub). Repeatable.")
+    p_rep.add_argument("--anchors", help="The owner's anchors.jsonl.")
+    p_rep.add_argument("--witness-file", help="A copy of the anchor lines a witness holds.")
+    p_rep.add_argument("--git-repo", help="Git witness repository for the anchors file's git sink references.")
+    p_rep.add_argument("--max-gap", type=int, help="Heartbeat gap limit in seconds.")
+    p_rep.add_argument("--peer-ledger", action="append", help="Another party's ledger, for the agent-to-agent section.")
+    p_rep.add_argument("--agent", action="append", help="Agent id whose ledger is among those given (repeatable).")
+    p_rep.add_argument("--format", choices=["md", "html", "json", "all"], default="md")
+    p_rep.add_argument("--out", help="Output file (or, with --format all, a path prefix). Default: standard output.")
+    p_rep.add_argument("--title", help="Printed at the top, labelled as supplied and not examined.")
+    p_rep.add_argument("--note", help="Printed at the top, labelled as supplied and not examined.")
+    p_rep.add_argument("--generated-at", help="'now' or YYYY-MM-DDTHH:MM:SSZ. Without it the report has no timestamp.")
+    p_rep.add_argument("--redact", action="store_true", help="Replace agent, tool and recorder names by codes "
+                       "(not secret: a guessable name can be recovered; see --redact-salt).")
+    p_rep.add_argument("--redact-salt", help="With --redact: a secret mixed into the codes, so guessing a name needs "
+                       "the salt. The salt is never printed. Without it the codes are unsalted and the report says so.")
+    p_rep.add_argument("--force", action="store_true", help="Replace an existing --out file (otherwise refused).")
+    p_rep.add_argument("--max-rows", type=int, help="Rows shown in long lists (counts are always complete).")
+    p_rep.set_defaults(func=cmd_report)
 
     p_lint = sub.add_parser("lint", help="Validate a policy YAML file.")
     p_lint.add_argument("policy_path")

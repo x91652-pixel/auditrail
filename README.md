@@ -210,6 +210,57 @@ so anchor hashes should also be copied to a third party periodically. Anchors ma
 with `--key` are signed (anchor_version 2, see [the format spec](docs/spec/evidence-format-v2.md));
 Merkle proofs and RFC 3161 timestamps are not implemented yet.
 
+## A readable report
+
+```bash
+auditrail report evidence.jsonl --pubkey keys/recorder.pub --witness-file witness-copy.jsonl --max-gap 120 \
+    --format all --out report          # writes report.md, report.html, report.json; exit 0 only if no check had a finding
+```
+
+The report says what the checks found, what they did **not** examine, and, in a section that cannot be switched
+off, what no report of this kind proves. It is deterministic (same input, same bytes; add `--generated-at now` for a
+timestamp), self-contained HTML, makes no network call, is not signed, and is a rendering of `verify`'s result, not
+new evidence. `--redact` replaces the names of agents, tools and recorders by codes in the fields that carry them
+(never the status words or the structure); the codes are **not secrets** (a guessable name can be recovered), so add
+`--redact-salt SECRET` if that matters, and note that policy versions, timestamps, counts and input hashes are not
+masked, nor is anything you put in `--title` or `--note`. Those two are printed on one line, escaped (a newline or
+Markdown syntax in them cannot add a section or a link) and labelled as supplied and not examined. The first screen
+says what ran and what did not from the outcomes, not from the flags (an empty witness file, an empty ledger or a
+ledger reconciled against itself is named as such). Failures to write are a one-line error with exit 2; an existing
+`--out` file is refused unless `--force`, and an input file is never overwritten. `stdout` is written as UTF-8 with
+LF line ends, the same bytes as `--out`. Exit code 0 means the main ledger and every check you supplied (including peer ledgers) found nothing; 1 means any finding **or an inconclusive result**, which is not necessarily tampering (a problem with a peer ledger gives 1 while the main ledger's own status stays as it is, listed under `overall.secondary` in the JSON); 2 means an input or the output could not be read or written. A `--redact-salt` is passed on the command line, so it is visible in the process list and shell history.
+
+To see the whole path in one go (an agent, a signature, a witness copy, one record altered, the verifier catching it,
+two reports), on Windows or Linux:
+
+```bash
+python -m examples.mvp_demo.run
+```
+
+In that demonstration the agent and the key are on one machine, so it shows the mechanism, not a deployment.
+
+### Reading a report
+
+A report is easy to over-read. The numbered points below are what it does not say; the full, fixed list is in its last section.
+
+1. **"No inconsistency found" is not "safe".** It means the checks that ran, over the records they covered, found nothing; the report lists what ran and what did not.
+2. **It covers only the tools the recorder wrapped.** An action by a tool that was not wrapped leaves no record, and the report cannot see it.
+3. **An unreadable or empty input is not a clean one.** An empty ledger, an empty witness file or a v0.1 ledger is reported as not examined, never as consistent. An empty ledger still exits 0 with status `OK`, and the report text says nothing was examined; an unreadable input exits 2 and no report is written.
+4. **Without a key, a consistent chain proves little.** Anyone who could write the file could have rewritten it consistently; check signatures with a key you trust.
+5. **Without an independent witness copy, removal or rewriting of records is not detectable**, and records after the last anchor are not covered by it.
+6. **A witness is only as independent as the people who hold it.** If the operator controls the witness copy, it adds little.
+7. **"Trusted" key means supplied, not verified.** The tool does not check where a key file came from.
+8. **A matched message pair shows two records agree, not that the other side is independent.** The same signing key on both sides is a clue that it is not; a different key does not prove that it is.
+9. **Exit code 1 is a finding or an inconclusive result, not necessarily tampering.** `UNSUPPORTED_*` can be provoked by editing a field and never means "untouched".
+10. **The report is not signed and can be edited**; its fingerprint helps compare two copies, it does not vouch for the content.
+11. **`--redact` is masking, not anonymisation.** The codes are not secrets, several fields stay visible, and the title and note are never masked.
+12. **The report was produced from the files you gave it.** If the recorder's host or key was compromised, none of it holds.
+13. **Heartbeats show only that the gap limit was checked.** They do not show that the agent used no tool that was not wrapped.
+14. **A `.md` file read as plain text shows escaping backslashes**; the rendered Markdown and the HTML do not.
+15. **The first screen is not the whole report.** The complete list of limits is in section 10; do not rely on the Result section alone.
+16. **`SECURITY.md` is not shipped with the package.** The report records only the hash of the file its list of limits was generated from, not which commit it came from.
+17. **"Verifier's original wording" is the verifier's text, not a promise by the report.** A phrase such as "all signatures valid" there describes what that check examined, under the limits above.
+
 ## Quickstart
 
 ```bash
@@ -292,7 +343,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 637 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 761 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and
