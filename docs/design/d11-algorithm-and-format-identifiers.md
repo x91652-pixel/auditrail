@@ -122,18 +122,22 @@ check runs, and they are reported only when nothing definite was found.*
 All checks keep the existing order: read rules → chain (`TAMPERED_LEDGER`) → signatures → field rules → anchors.
 The algorithm is looked at in the signature step, *after* the hash has held, and an unsupported one defers.
 
-### 3.1 Statuses
+### 3.1 Statuses (as implemented; D-14 and the evaluation-order correction are folded in)
 
 | situation | status | tamper evidence? |
 |---|---|---|
-| no `sig_alg` | as today | — |
-| `sig_alg` present but not a string, empty, wrong characters or case (`"Ed25519"`, `" es256"`) | `MALFORMED_RECORD` | no (malformed) |
-| `sig_alg` is `"ed25519"` (non-canonical, rule 1.2.1) | `MALFORMED_RECORD` | no |
-| `sig_alg` is a well-formed token **this verifier does not implement**, and trusted keys were given | **`UNSUPPORTED_ALGORITHM`** (+`bad_seq`) | **no** — an inconclusive result |
-| same, no trusted keys given | not a failure: signatures are not checked anyway; the report lists "records at seq N use signature algorithm X, which this verifier cannot check" | — |
-| `sig_alg` known, but the trusted key for `key_id` is of another type | `BAD_SIGNATURE` (detail "algorithm mismatch") | **yes** (confusion/downgrade attempt) |
-| `format` an integer ≠ 2 | **`UNSUPPORTED_FORMAT`** | no |
-| anchor of `anchor_version` 3 read by a reader that implements it but not the algorithm | `UNSUPPORTED_ALGORITHM` | no |
+| no `sig_alg` | as before the change | — |
+| `sig_alg` present but not a string, empty, wrong characters or case (`"Ed25519"`, `" es256"`, a trailing newline) | `MALFORMED_RECORD` (`TAMPERED_ANCHOR` in an anchor) | no (malformed) |
+| `sig_alg` is `"ed25519"` (non-canonical, rule 1.2.1) | `MALFORMED_RECORD` (`TAMPERED_ANCHOR`) | no |
+| the record's `key_id` is a trusted key of one type and the record claims another algorithm, **implemented here or not** (for `.pub` input: any `sig_alg` other than the default) | **`BAD_SIGNATURE`** ("algorithm mismatch") | **yes** (definite) |
+| the key is *registered* as type X (Python `TrustedKeys` only), the record says X, and this verifier does not implement X | `UNSUPPORTED_ALGORITHM` (remembered, reported only if nothing definite is found; carries `anchored_upto`/`unanchored_tail`) | **no** — inconclusive, and never "untouched" |
+| any non-default `sig_alg`, no trusted keys given | not a failure: signatures are not checked anyway; `unchecked_algorithms` and a note name the algorithm | — |
+| a different key (its own `key_id`) | `UNKNOWN_KEY` | key not trusted |
+| `format` an integer ≠ 2, the hash holding | `UNSUPPORTED_FORMAT` (remembered; the record's signature is still checked) | no — inconclusive |
+| anchor of `anchor_version` 3, `sig_alg` other than the trusted key's | `BAD_SIGNATURE`; if the key is registered as that type and unimplemented, `UNSUPPORTED_ALGORITHM` | as for records |
+
+For `.pub` file input `UNSUPPORTED_ALGORITHM` cannot occur: every key read from a file is Ed25519. The Rust verifier
+has no way to register another type and never emits it.
 
 ### 3.2 Why the existing statuses are not enough
 
