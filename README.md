@@ -114,6 +114,7 @@ replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by ev
   check.
 - **Behavior change:** the same tool labelled differently by two agent sections raises `PolicyError` when it is
   wrapped; give it one label set.
+- **Behavior change (verifiers, Python and Rust):** two new statuses, `UNSUPPORTED_ALGORITHM` (inconclusive, exit 1: the trusted key is registered as an algorithm the verifier cannot check; a `.pub` file cannot express that, so file input gets `BAD_SIGNATURE` "algorithm mismatch" for any record that names an algorithm other than its Ed25519 key's) and `UNSUPPORTED_FORMAT` (`format` is an integer other than 2). An optional `sig_alg` member names the algorithm; absent means Ed25519 and Ed25519 is always written by omission, so existing ledgers are unchanged. An explicit `"sig_alg":"ed25519"` is rejected. See [the format spec](docs/spec/evidence-format-v2.md).
 
 These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
 see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
@@ -291,7 +292,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 531 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 637 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and

@@ -1,0 +1,7 @@
+{
+  "args": {
+    "require_signatures": true
+  },
+  "bad_seq": 2,
+  "status": "MALFORMED_RECORD"
+}

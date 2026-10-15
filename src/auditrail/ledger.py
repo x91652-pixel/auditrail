@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 from ._strict import is_hex
-from .keys import TAG_RECORD, Signer, verify_sig
+from .keys import DEFAULT_ALG, TAG_RECORD, Signer, verify_sig
 
 GENESIS_HASH = "0" * 64
 FORMAT_VERSION = 2
@@ -240,6 +240,8 @@ class Ledger:
 
     def _append(self, fields: dict) -> EvidenceRecord:
         _check_no_floats(fields)
+        if "sig_alg" in fields:  # the ledger decides it from the signer; a caller must not be able to forge it
+            raise InvalidRecord("field 'sig_alg' is set by the ledger itself")
         with _file_lock(self._lock_path):
             last_seq, prev_hash = self._head()
             rec = {
@@ -251,6 +253,8 @@ class Ledger:
             }
             if self.signer is not None:
                 rec["key_id"] = self.signer.key_id
+                if self.signer.alg != DEFAULT_ALG:  # Ed25519 is the absence of the member
+                    rec["sig_alg"] = self.signer.alg
             rec["hash"] = record_hash(prev_hash, rec)
             if self.signer is not None:
                 rec["sig"] = self.signer.sign(TAG_RECORD, rec["hash"].encode("ascii"))
@@ -300,7 +304,7 @@ class Ledger:
         """Record a non-call event: a heartbeat or one side of an agent-to-agent message."""
         if kind not in EVENT_KINDS:
             raise InvalidRecord(f"kind must be one of {EVENT_KINDS}, got {kind!r}")
-        reserved = {"format", "seq", "ts", "kind", "prev_hash", "hash", "sig", "key_id"} & set(fields)
+        reserved = {"format", "seq", "ts", "kind", "prev_hash", "hash", "sig", "key_id", "sig_alg"} & set(fields)
         if reserved:
             raise InvalidRecord(f"fields {sorted(reserved)} are set by the ledger itself")
         return self._append({"kind": kind, **fields})

@@ -31,6 +31,9 @@ fn every_vector_matches_its_expected_result() {
         if let Some(w) = args["witness"].as_str() {
             opts.witness = Some(fs::read(case.join(w)).unwrap());
         }
+        if let Some(a) = args["anchors"].as_str() {
+            opts.anchors = Some(fs::read(case.join(a)).unwrap());
+        }
         opts.max_gap_s = args["max_gap_s"].as_i64();
 
         let got = auditrail_verify::verify_bytes(&fs::read(case.join("ledger.jsonl")).unwrap(), &opts);

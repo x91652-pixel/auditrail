@@ -37,8 +37,15 @@ def key_id_for(public_hex: str) -> str:
     return hashlib.sha256(bytes.fromhex(public_hex)).hexdigest()[:16]
 
 
+DEFAULT_ALG = "ed25519"  # what a record or anchor without `sig_alg` means; writers never write it explicitly
+
+
 class Signer:
     """Holds one Ed25519 private key. Never pass this object into agent code."""
+
+    #: the algorithm token this signer's signatures belong to. Anything but DEFAULT_ALG is written to the record
+    #: as `sig_alg`; Ed25519 never is, so default ledgers are byte-identical to what they always were.
+    alg = DEFAULT_ALG
 
     def __init__(self, private_key: Ed25519PrivateKey):
         self._key = private_key
@@ -111,6 +118,34 @@ def parse_public_hex(text: str) -> str:
         raise ValueError("a public key file must hold exactly 64 hexadecimal digits (32 bytes), "
                          "optionally surrounded by whitespace")
     return trimmed.lower()
+
+
+# token -> callable(public_hex, tag, message, sig_hex) -> bool. Only the default exists. Tests may add an entry to
+# exercise "one verifier knows an algorithm and the other does not"; nothing else should.
+_VERIFIERS = {DEFAULT_ALG: verify_sig}
+
+
+def supported_algorithms() -> frozenset:
+    return frozenset(_VERIFIERS)
+
+
+def verify_with(alg: str, public_hex: str, tag: bytes, message: bytes, sig_hex: str) -> bool:
+    """Verify with the named algorithm; False for an algorithm this verifier does not implement."""
+    fn = _VERIFIERS.get(alg)
+    return fn is not None and fn(public_hex, tag, message, sig_hex)
+
+
+class TrustedKeys(dict):
+    """{key_id: public_hex} plus the algorithm each key belongs to ({key_id: token}; a missing entry means the
+    default). load_public_keys returns a plain dict: every .pub file is an Ed25519 key."""
+
+    def __init__(self, keys=None, algorithms=None):
+        super().__init__(keys or {})
+        self.algorithms = dict(algorithms or {})
+
+
+def key_algorithm(public_keys, key_id: str) -> str:
+    return getattr(public_keys, "algorithms", {}).get(key_id, DEFAULT_ALG)
 
 
 def load_public_keys(paths) -> dict[str, str]:

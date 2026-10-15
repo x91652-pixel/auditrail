@@ -1,0 +1,8 @@
+{
+  "args": {
+    "anchors": "anchors.jsonl",
+    "require_signatures": true
+  },
+  "bad_seq": 6,
+  "status": "BAD_SIGNATURE"
+}
