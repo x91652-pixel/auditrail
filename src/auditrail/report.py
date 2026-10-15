@@ -380,8 +380,11 @@ def build_report(
     if peer_ledgers:
         if evaluable:
             res = reconcile([str(ledger), *[str(p) for p in peer_ledgers]], public_keys=keys, agents=list(agents))
+            own = inputs[0]["sha256"]
+            same = [i["name"] for i in inputs if i["role"] == "peer ledger" and i["sha256"] == own]
             a2a.update(evaluated=True, status=res["status"], detail=res.get("detail", ""),
                        matched=res.get("matched"), unverifiable=res.get("unverifiable"),
+                       peer_same_as_ledger=len(same), peers_given=len(peer_ledgers),
                        findings=res.get("findings", [])[:max_rows],
                        findings_hidden=max(0, len(res.get("findings", [])) - max_rows),
                        rejected=len(res.get("rejected", [])))
@@ -392,23 +395,61 @@ def build_report(
                                               if k.startswith("a2a")}
     data["a2a"] = a2a
 
-    # --- not checked
+    # --- what ran and what did not, from the outcomes (not from the flags)
+    n_records = len(records) if records else 0
+    readable = chain_state in ("consistent", "inconclusive", "failed")
     nc = []
-    if keys is None:
+    ran = []
+    if n_records == 0 and evaluable:
+        nc.append("The ledger holds no records: nothing was examined, so no check had anything to find.")
+    elif readable:
+        ran.append("Hash chain and field rules over the records.")
+        if keys is not None:
+            ran.append("Signatures against the trusted keys given.")
+    if keys is None and n_records:
         nc.append("Signatures were NOT CHECKED (no public key was given): anyone who could write the file could "
                   "have rewritten the chain consistently.")
-    if anchors_path is None and witness_path is None:
-        nc.append("No anchors or witness copy were given: removal of records and whole-chain rewrites are not "
-                  "detectable from this input.")
+    effective = []
+    for name, sec in (("owner's anchors file", data["anchors"]), ("witness copy", data["witness"])):
+        if not sec.get("given"):
+            continue
+        if sec.get("evaluated") is False:
+            nc.append(f"The {name} was not evaluated because the records failed an earlier check.")
+        elif sec.get("status") == "SINK_UNREACHABLE":
+            nc.append(f"The {name} could not be read: those anchors were not checked.")
+        elif sec.get("lines", 0) == 0:
+            nc.append(f"The {name} that was given holds no anchors: nothing was compared against it.")
+        else:
+            effective.append(name)
+            ran.append(f"The {name} ({sec['lines']} line(s)).")
+    if not effective and n_records:
+        nc.append("No anchor or witness copy was available to compare against: removal of records and whole-chain "
+                  "rewrites are not detectable from this input.")
     if max_gap_s is None:
-        nc.append("Heartbeats were NOT CHECKED (no gap limit was given): silent periods are not detectable.")
+        if n_records:
+            nc.append("Heartbeats were NOT CHECKED (no gap limit was given): silent periods are not detectable.")
+    elif evaluable and n_records:
+        ran.append(f"Heartbeats against a limit of {max_gap_s} seconds.")
     for alg in data["unchecked_algorithms"]:
         nc.append(f"Signatures made with algorithm '{alg}' were NOT CHECKED: this verifier cannot check them.")
-    for name, sec in (("anchors", data["anchors"]), ("witness copy", data["witness"])):
-        if sec.get("given") and sec.get("evaluated") and sec.get("status") == "SINK_UNREACHABLE":
-            nc.append(f"The {name} could not be read: those anchors were not checked.")
-        if sec.get("given") and sec.get("evaluated") is False:
-            nc.append(f"The {name} were not evaluated because the records failed an earlier check.")
+    if a2a.get("given"):
+        if not a2a.get("evaluated"):
+            nc.append("The agent-to-agent messages were not evaluated because the records failed an earlier check.")
+        else:
+            n_find = len(a2a.get("findings", [])) + a2a.get("findings_hidden", 0)
+            compared = (a2a.get("matched") or 0) + n_find
+            if a2a["peer_same_as_ledger"]:
+                nc.append(f"{a2a['peer_same_as_ledger']} of the {a2a['peers_given']} peer ledger(s) given has the same "
+                          "content as the ledger itself: a ledger cannot be reconciled against itself, and such a "
+                          "peer says nothing about the other side.")
+            if a2a.get("unverifiable"):
+                nc.append(f"{a2a['unverifiable']} message(s) could not be compared: the ledger of the other side "
+                          "was not supplied.")
+            if compared and not (a2a["peer_same_as_ledger"] == a2a["peers_given"]):
+                ran.append(f"Agent-to-agent messages: {a2a.get('matched') or 0} matched, {n_find} finding(s).")
+            else:
+                nc.append("No agent-to-agent message was compared against another party's record.")
+    data["checks_ran"] = ran
     data["not_checked"] = nc
 
     # --- redaction: only the values of known name fields are replaced; statuses and structure keys are never touched
@@ -510,7 +551,15 @@ def _doc(data: dict) -> tuple[list, list]:
     """Return (blocks before the fixed section, blocks of the fixed section). A block is a tuple."""
     B: list = []
     o = data["overall"]
-    ex = explain(o["status"])
+    empty_ok = data.get("scope") is not None and data["scope"].get("records") == 0
+
+    def ex_of(status):
+        e = explain(status)
+        if empty_ok and status == "OK":
+            e = {**e, "means": "The ledger held no records, so no check had anything to examine."}
+        return e
+
+    ex = ex_of(o["status"])
     B.append(("h1", "auditrail verification report"))
     unmasked = " It was NOT masked by --redact." if data.get("redacted") else ""
     if data.get("title"):
@@ -531,7 +580,13 @@ def _doc(data: dict) -> tuple[list, list]:
 
     # 1 Result
     B.append(("h2", "1. Result"))
-    if o["status"] == "OK":
+    empty = data.get("scope") is not None and data["scope"].get("records") == 0
+    if o["status"] == "OK" and empty:
+        B.append(("p", "The ledger holds no records. Nothing was examined, and this is not a statement about "
+                       "anything that may have happened."))
+    elif o["status"] == "OK" and not data.get("checks_ran"):
+        B.append(("p", "No check ran over any record, so no statement is made about them."))
+    elif o["status"] == "OK":
         B.append(("p", "The checks listed under 'Checks that ran' found no inconsistency in the records they covered."))
     elif ex["cls"] == "inconclusive":
         B.append(("p", f"No definite finding was made, but the examination is incomplete: {o['status']} "
@@ -541,7 +596,11 @@ def _doc(data: dict) -> tuple[list, list]:
         B.append(("p", f"A finding was made: {o['status']}{at} ({ex['label']})."))
     B.append(("p", f"Verifier status: {o['status']}. {ex['means']}"))
     if o.get("detail"):
-        B.append(("p", f"Verifier detail: {o['detail']}"))
+        B.append(("p", f"Verifier's original wording: {o['detail']}"))
+    B.append(("p", "This report is not signed and can be edited after it was made. Its fingerprint is a hash that makes "
+                   "two copies easy to compare; it does not vouch for the content and is not a seal."))
+    B.append(("p", "If the recorder's host or key was compromised, or the witness is not independent of the operator, "
+                   "none of the above holds (see section 10)."))
     B.append(("p", "What this does not cover: " + ex["not_means"]))
     B.append(("p", "This report covers only tool calls that went through the recorder's wrapped tools. The tool list "
                    "shown under 'Heartbeats' is what the recorder reports as wrapped, not a statement of what the "
@@ -554,20 +613,11 @@ def _doc(data: dict) -> tuple[list, list]:
                        "cannot be detected by anchors; without keys, or with only a witness copy, the result for "
                        "them is OK with a note."))
     B.append(("h3", "Checks that ran"))
-    ran = [f"Hash chain and field rules over the records (always)."]
-    if data["signatures_required"]:
-        ran.append("Signatures against the trusted keys given.")
-    if data["anchors"].get("given"):
-        ran.append("The owner's anchors file." if data["anchors"].get("evaluated") else "The owner's anchors file (not evaluated).")
-    if data["witness"].get("given"):
-        ran.append("The witness copy." if data["witness"].get("evaluated") else "The witness copy (not evaluated).")
-    if data["heartbeats"].get("max_gap_s") is not None:
-        ran.append(f"Heartbeats against a limit of {data['heartbeats']['max_gap_s']} seconds.")
-    if data["a2a"].get("given"):
-        ran.append("Agent-to-agent messages against the supplied peer ledgers.")
+    ran = list(data.get("checks_ran") or []) or ["No check ran over any record."]
     B.append(("ul", ran))
     B.append(("h3", "Not checked"))
-    B.append(("ul", data["not_checked"] or ["Every check that was requested ran. The checks themselves have limits: see section 10."]))
+    B.append(("ul", data["not_checked"] or ["No additional item was left unchecked. The limits of the checks "
+                                            "themselves are in section 10."]))
 
     # 2 Examined
     B.append(("h2", "2. What was examined"))
@@ -592,7 +642,8 @@ def _doc(data: dict) -> tuple[list, list]:
     if data["keys"]:
         B.append(("table", ["Key id", "SHA-256 of the public key", "Algorithm"],
                   [[k["key_id"], k["fingerprint_sha256"], k["algorithm"]] for k in data["keys"]]))
-        B.append(("p", "Every record had to be signed by one of these keys." if data["signatures_required"] else ""))
+        B.append(("p", "Every record had to be signed by one of these keys. 'Trusted' means the keys the operator "
+                       "supplied; this tool does not confirm where they came from."))
     else:
         B.append(("p", "No trusted key was given, so signatures were not checked."))
     if data.get("record_key_ids") is not None:
@@ -603,19 +654,23 @@ def _doc(data: dict) -> tuple[list, list]:
     B.append(("h2", "4. Verification outcome"))
     rows = []
     c = data["chain"]
-    rows.append(["Hash chain, signatures, field rules",
-                 "ran" if data["chain"]["state"] != "unreadable" else "could not be read",
-                 c["status"], explain(c["status"])["means"]])
+    rows.append(["Hash chain, signatures and field rules" if data["signatures_required"]
+                 else "Hash chain and field rules (signatures not checked: no key given)",
+                 "ran" if data["chain"]["state"] not in ("unreadable", "legacy") and
+                 (data.get("scope") or {}).get("records", 1) != 0 else "did not run",
+                 c["status"], ex_of(c["status"])["means"]])
     for name, sec in (("Owner's anchors file", data["anchors"]), ("Witness copy", data["witness"])):
         if not sec.get("given"):
             rows.append([name, "not given", "-", "Not examined."])
         elif not sec.get("evaluated"):
             rows.append([name, "not evaluated", "-", "The records failed an earlier check; these lines cannot be relied on."])
+        elif sec.get("lines", 0) == 0 and sec["status"] == "OK":
+            rows.append([name, "empty: nothing compared", "-", "The file holds no anchors, so no comparison was made."])
         else:
-            rows.append([name, "ran", sec["status"], explain(sec["status"])["means"]])
+            rows.append([name, "ran", sec["status"], ex_of(sec["status"])["means"]])
     hb = data["heartbeats"]
     if hb.get("status"):
-        rows.append(["Heartbeats", "ran", hb["status"], explain(hb["status"])["means"] if hb["status"] != "OK"
+        rows.append(["Heartbeats", "ran", hb["status"], ex_of(hb["status"])["means"] if hb["status"] != "OK"
                      else "No period longer than the limit without a heartbeat."])
     else:
         rows.append(["Heartbeats", "not checked" if hb.get("evaluated") else "not evaluated", "-",
@@ -624,7 +679,7 @@ def _doc(data: dict) -> tuple[list, list]:
     B.append(("h3", "What each status means"))
     seen = sorted({r[2] for r in rows if r[2] not in ("-",)} | {o["status"]})
     B.append(("table", ["Status", "Class", "Meaning", "What it does not mean"],
-              [[s, explain(s)["cls"], explain(s)["means"], explain(s)["not_means"]] for s in seen]))
+              [[s, ex_of(s)["cls"], ex_of(s)["means"], ex_of(s)["not_means"]] for s in seen]))
 
     # 5 Witness
     B.append(("h2", "5. Witness and anchors"))
@@ -633,7 +688,10 @@ def _doc(data: dict) -> tuple[list, list]:
         if not sec.get("given"):
             continue
         any_anchor = True
-        if sec.get("evaluated"):
+        if sec.get("evaluated") and sec.get("lines", 0) == 0:
+            B.append(("p", f"{name}: the file holds no anchors, so nothing was compared against it. "
+                           f"(Verifier status {sec['status']}.)"))
+        elif sec.get("evaluated"):
             B.append(("p", f"{name}: {sec['lines']} line(s); status {sec['status']}. {sec.get('detail', '')}"))
             B.append(("table", ["Seq", "Created", "Key id", "Version", "Algorithm", "Published as"],
                       [[str(r["seq"]), str(r["created_at"]), str(r["key_id"]), str(r["version"]), str(r["sig_alg"]),
@@ -716,6 +774,14 @@ def _doc(data: dict) -> tuple[list, list]:
         B.append(("p", "Not evaluated: the records failed an earlier check."))
     else:
         B.append(("p", f"Status {a['status']}: {a['detail']}"))
+        if a.get("peer_same_as_ledger"):
+            B.append(("p", f"{a['peer_same_as_ledger']} peer ledger(s) given have the same content as the ledger itself; "
+                           "they were not an independent record of the other side."))
+        if not (a.get("matched") or a["findings"] or a.get("findings_hidden")):
+            B.append(("p", "No message was matched against another party's record."))
+        if a.get("unverifiable"):
+            B.append(("p", f"{a['unverifiable']} message(s) could not be compared because the other side's ledger "
+                           "was not supplied."))
         if a["findings"]:
             fr = [[f["type"], f.get("agent_id") or "", f.get("peer") or "", str(f.get("seq")), f.get("ledger", "")]
                   for f in a["findings"]]

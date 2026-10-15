@@ -1,0 +1,148 @@
+"""T-036 R-3: 'Checks that ran' and 'Not checked' follow the actual outcomes, never the flags."""
+import json
+from pathlib import Path
+
+import pytest
+
+from auditrail import Ledger, Signer
+from auditrail.report import build_report, render_html, render_json, render_md
+
+SEED = bytes(range(32))
+
+
+def make_ledger(path, signer, n=3, kinds=("allow",)):
+    led = Ledger(path, signer=signer, fsync=False)
+    for i in range(n):
+        led.record(agent_id="a", session_id="s", policy_version="p", policy_hash="ab" * 32, tool="x",
+                   categories=["c"], args={"i": i}, decision="allow")
+    return led
+
+
+@pytest.fixture
+def env(tmp_path):
+    signer = Signer.from_seed(SEED)
+    make_ledger(tmp_path / "l.jsonl", signer)
+    (tmp_path / "k.pub").write_text(signer.public_hex + "\n", encoding="utf-8")
+    return tmp_path, signer
+
+
+def section(md, heading, nxt):
+    return md.split(heading)[1].split(nxt)[0]
+
+
+def lists(md):
+    """(checks that ran, not checked) as raw markdown text blocks from the Result section."""
+    res = md.split("## 1. Result")[1].split("## 2.")[0]
+    ran = res.split("### Checks that ran")[1].split("### Not checked")[0]
+    nc = res.split("### Not checked")[1]
+    return res, ran, nc
+
+
+# --- L-1: an anchors file or witness copy with no anchors in it
+@pytest.mark.parametrize("content", ["", "\n", "  \n\n \n"])
+@pytest.mark.parametrize("which", ["witness_path", "anchors_path"])
+def test_l1_an_empty_witness_or_anchor_file_is_not_a_comparison(env, content, which):
+    w, _ = env
+    (w / "e.jsonl").write_text(content, encoding="utf-8")
+    data = build_report(w / "l.jsonl", public_key_paths=[w / "k.pub"], **{which: w / "e.jsonl"})
+    md = render_md(data)
+    res, ran, nc = lists(md)
+    assert data["overall"]["status"] == "OK"
+    label = "witness copy" if which == "witness_path" else "owner's anchors file"
+    assert f"The {label}" not in ran.replace("holds no anchors", ""), ran
+    assert f"The {label} that was given holds no anchors: nothing was compared against it." in nc
+    assert "removal of records and whole-chain" in nc
+    assert "holds no anchors" in md.split("## 4.")[1].split("## 5.")[0] or "empty: nothing compared" in md
+    for out in (md, render_html(data)):
+        assert "0 witnessed anchor(s) match" not in out.split("## 5.")[0]
+
+
+# --- L-2: agent-to-agent messages that could not be compared
+def test_l2_a_ledger_reconciled_against_itself_is_named(env):
+    w, signer = env
+    led = Ledger(w / "a.jsonl", signer=signer, fsync=False)
+    led.record_event("a2a_send", agent_id="a", peer="b", msg_id="m1", msg_digest="1" * 64)
+    (w / "copy.jsonl").write_bytes((w / "a.jsonl").read_bytes())
+    data = build_report(w / "a.jsonl", public_key_paths=[w / "k.pub"], peer_ledgers=[w / "copy.jsonl", w / "a.jsonl"])
+    md = render_md(data)
+    res, ran, nc = lists(md)
+    assert "same content as the ledger itself" in nc
+    assert "Agent-to-agent messages" not in ran
+    assert "No agent-to-agent message was compared against another party" in nc
+    assert "not an independent record" in md.split("## 9.")[1]
+
+
+def test_l2_messages_without_the_other_side_are_counted_as_not_compared(env):
+    w, signer = env
+    led = Ledger(w / "a.jsonl", signer=signer, fsync=False)
+    for i in range(2):
+        led.record_event("a2a_send", agent_id="a", peer="b", msg_id=f"m{i}", msg_digest=str(i) * 64)
+    other = Ledger(w / "c.jsonl", signer=signer, fsync=False)
+    other.record(agent_id="c", session_id="s", policy_version="p", policy_hash="ab" * 32, tool="x",
+                 categories=["c"], args={}, decision="allow")
+    data = build_report(w / "a.jsonl", public_key_paths=[w / "k.pub"], peer_ledgers=[w / "c.jsonl"])
+    res, ran, nc = lists(render_md(data))
+    assert data["a2a"]["unverifiable"] == 2
+    assert "2 message\(s\) could not be compared" in nc
+    assert "Agent-to-agent messages" not in ran
+
+
+# --- L-3: no key
+def test_l3_without_a_key_no_signature_wording_anywhere(env):
+    w, _ = env
+    data = build_report(w / "l.jsonl")
+    md = render_md(data)
+    res, ran, nc = lists(md)
+    assert "Signatures against the trusted keys" not in ran
+    assert "Signatures were NOT CHECKED" in nc
+    table = md.split("## 4.")[1].split("## 5.")[0]
+    assert "signatures not checked: no key given" in table
+    assert "Hash chain, signatures and field rules" not in table
+    assert "Hash chain, signatures and field rules" in render_md(build_report(w / "l.jsonl",
+                                                                              public_key_paths=[w / "k.pub"]))
+
+
+# --- L-4: an empty ledger
+@pytest.mark.parametrize("with_key", [True, False])
+def test_l4_an_empty_ledger_is_not_reported_as_having_no_inconsistency(env, with_key):
+    w, _ = env
+    (w / "e.jsonl").write_text("", encoding="utf-8")
+    data = build_report(w / "e.jsonl", public_key_paths=[w / "k.pub"] if with_key else (), max_gap_s=60)
+    md = render_md(data)
+    res, ran, nc = lists(md)
+    assert "The ledger holds no records. Nothing was examined" in res
+    assert "found no inconsistency" not in md.split("## 10.")[0]
+    assert "The ledger holds no records: nothing was examined" in nc
+    assert "Hash chain and field rules over the records." not in ran
+    assert "No check ran over any record." in ran
+    assert "Heartbeats against a limit" not in ran
+
+
+def test_not_checked_with_nothing_to_list_carries_no_reassurance(env, tmp_path):
+    w, signer = env
+    from auditrail.anchor import FileSink, anchor_ledger
+
+    led = Ledger(w / "l2.jsonl", signer=signer, fsync=False)
+    led.record_heartbeat(recorder_id="r", tools=["x"], policy_version="p", policy_hash="ab" * 32, calls_attempted=0,
+                         calls_recorded=0, interval_s=60)
+    anchor_ledger(led, w / "a2.jsonl", sink=FileSink(w / "w2.jsonl"), signer=signer)
+    data = build_report(w / "l2.jsonl", public_key_paths=[w / "k.pub"], witness_path=w / "w2.jsonl",
+                        max_gap_s=3600)
+    assert data["not_checked"] == []
+    md = render_md(data)
+    nc = md.split("### Not checked")[1].split("## 2.")[0]
+    assert "Every check that was requested ran" not in md
+    assert "No additional item was left unchecked. The limits of the checks themselves are in section 10." in nc
+
+
+def test_the_result_carries_the_added_fixed_sentences(env):
+    w, _ = env
+    md = render_md(build_report(w / "l.jsonl"))
+    res = md.split("## 1. Result")[1].split("## 2.")[0]
+    assert "This report is not signed and can be edited after it was made." in res
+    assert "does not vouch for the content and is not a seal" in res
+    assert "none of the above holds" in res
+    assert "Verifier's original wording:" in res
+    assert "this tool does not confirm where they came from" in render_md(
+        build_report(w / "l.jsonl", public_key_paths=[w / "k.pub"]))
+    assert json.loads(render_json(build_report(w / "l.jsonl")))["checks_ran"]
