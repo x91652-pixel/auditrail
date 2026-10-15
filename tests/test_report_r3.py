@@ -146,3 +146,42 @@ def test_the_result_carries_the_added_fixed_sentences(env):
     assert "this tool does not confirm where they came from" in render_md(
         build_report(w / "l.jsonl", public_key_paths=[w / "k.pub"]))
     assert json.loads(render_json(build_report(w / "l.jsonl")))["checks_ran"]
+
+
+# --- T-038 C-3: a copy that differs in bytes is still the same ledger; peers' keys are shown
+def test_c3_a_peer_that_is_the_same_records_in_other_bytes_is_named(env):
+    w, signer = env
+    led = Ledger(w / "a.jsonl", signer=signer, fsync=False)
+    led.record_event("a2a_send", agent_id="a", peer="b", msg_id="m1", msg_digest="1" * 64)
+    raw = (w / "a.jsonl").read_bytes()
+    variants = {"blank-line": raw + b"\n", "crlf": raw.replace(b"\n", b"\r\n"), "leading-blank": b"\n" + raw}
+    named = 0
+    for name, b in variants.items():
+        (w / f"{name}.jsonl").write_bytes(b)
+        data = build_report(w / "a.jsonl", public_key_paths=[w / "k.pub"], peer_ledgers=[w / f"{name}.jsonl"])
+        md = render_md(data)
+        if "same content as the ledger itself" in md:
+            named += 1
+        else:
+            # a variant the strict reader refuses is reported through the reconcile status, never as independent
+            assert data["a2a"]["status"] != "OK" or data["a2a"]["peers"][0]["records"] is not None, name
+    assert named == 3
+
+
+def test_c3_peer_keys_and_record_counts_are_printed_and_same_key_is_flagged(env):
+    w, signer = env
+    la = Ledger(w / "a.jsonl", signer=signer, fsync=False)
+    la.record_event("a2a_send", agent_id="a", peer="b", msg_id="m1", msg_digest="1" * 64)
+    lb = Ledger(w / "b.jsonl", signer=signer, fsync=False)
+    lb.record_event("a2a_recv", agent_id="b", peer="a", msg_id="m1", msg_digest="1" * 64, status="accepted")
+    data = build_report(w / "a.jsonl", public_key_paths=[w / "k.pub"], peer_ledgers=[w / "b.jsonl"])
+    md = render_md(data)
+    res, ran, nc = lists(md)
+    kid = signer.key_id
+    assert kid in md.split("## 9.")[1]
+    assert "1 record\(s\)" in md.split("## 9.")[1]
+    assert "does not show the other side is independent" in md.split("## 9.")[1]
+    assert "does not show the other side is independent" in ran and kid in ran
+    nokey = render_md(build_report(w / "a.jsonl", peer_ledgers=[w / "b.jsonl"]))
+    assert "Peer ledger signatures were not checked" in nokey
+    assert "were not checked \(no public key was given\)" in nokey.split("## 9.")[1]

@@ -380,11 +380,18 @@ def build_report(
     if peer_ledgers:
         if evaluable:
             res = reconcile([str(ledger), *[str(p) for p in peer_ledgers]], public_keys=keys, agents=list(agents))
-            own = inputs[0]["sha256"]
-            same = [i["name"] for i in inputs if i["role"] == "peer ledger" and i["sha256"] == own]
+            own_kids = set(data.get("record_key_ids") or [])
+            peers = []
+            for pp in peer_ledgers:
+                prs, prob = _read_records(Path(pp))
+                kids = sorted({r["key_id"] for r in prs if isinstance(r.get("key_id"), str)}) if not prob else []
+                peers.append({"name": Path(pp).name, "records": None if prob else len(prs), "key_ids": kids,
+                              "same_content": (not prob) and prs == records,
+                              "same_key": bool(own_kids & set(kids)), "signatures_checked": keys is not None})
+            same = [x for x in peers if x["same_content"]]
             a2a.update(evaluated=True, status=res["status"], detail=res.get("detail", ""),
                        matched=res.get("matched"), unverifiable=res.get("unverifiable"),
-                       peer_same_as_ledger=len(same), peers_given=len(peer_ledgers),
+                       peer_same_as_ledger=len(same), peers_given=len(peer_ledgers), peers=peers,
                        findings=res.get("findings", [])[:max_rows],
                        findings_hidden=max(0, len(res.get("findings", [])) - max_rows),
                        rejected=len(res.get("rejected", [])))
@@ -445,8 +452,16 @@ def build_report(
             if a2a.get("unverifiable"):
                 nc.append(f"{a2a['unverifiable']} message(s) could not be compared: the ledger of the other side "
                           "was not supplied.")
+            if keys is None:
+                nc.append("Peer ledger signatures were not checked (no public key was given).")
             if compared and not (a2a["peer_same_as_ledger"] == a2a["peers_given"]):
-                ran.append(f"Agent-to-agent messages: {a2a.get('matched') or 0} matched, {n_find} finding(s).")
+                desc = "; ".join(
+                    f"{pr['records'] if pr['records'] is not None else 'unreadable'} record(s), key id(s) "
+                    f"{', '.join(pr['key_ids']) or 'none'}"
+                    + (", same signing key as the ledger: this does not show the other side is independent"
+                       if pr["same_key"] else "") for pr in a2a["peers"])
+                ran.append(f"Agent-to-agent messages: {a2a.get('matched') or 0} matched, {n_find} finding(s); "
+                           f"peer ledgers: {desc}.")
             else:
                 nc.append("No agent-to-agent message was compared against another party's record.")
     data["checks_ran"] = ran
@@ -544,6 +559,7 @@ def _redact(data: dict, records: list, agents, salt: Optional[str], input_paths:
     a2a = out["a2a"]
     if "detail" in a2a:
         a2a["detail"] = text(a2a["detail"])
+        a2a["peers"] = [{**pr, "name": f"(peer ledger {i}: name withheld)"} for i, pr in enumerate(a2a.get("peers", []), 1)]
         a2a["findings"] = [{**f, "agent_id": val("agent", f.get("agent_id")), "peer": val("agent", f.get("peer")),
                             "ledger": "(name withheld)"} for f in a2a["findings"]]
     for i in out["inputs"]:
@@ -779,6 +795,13 @@ def _doc(data: dict) -> tuple[list, list]:
         B.append(("p", "Not evaluated: the records failed an earlier check."))
     else:
         B.append(("p", f"Status {a['status']}: {a['detail']}"))
+        for i, pr in enumerate(a.get("peers", []), 1):
+            B.append(("p", f"Peer ledger {i} ({pr['name']}): {pr['records'] if pr['records'] is not None else 'unreadable'} "
+                           f"record(s), signing key id(s): {', '.join(pr['key_ids']) or 'none'}; signatures "
+                           + ("checked against the trusted keys given." if pr["signatures_checked"]
+                              else "were not checked (no public key was given).")
+                           + (" Same signing key as the ledger: this does not show the other side is independent."
+                              if pr["same_key"] else "")))
         if a.get("peer_same_as_ledger"):
             B.append(("p", f"{a['peer_same_as_ledger']} peer ledger(s) given have the same content as the ledger itself; "
                            "they were not an independent record of the other side."))
