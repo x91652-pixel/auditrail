@@ -109,8 +109,13 @@ bind the algorithm so two key types cannot share an id) is deferred with the key
 
 ## 3. What readers do
 
+*Corrected after T-026 (the first implementation followed the order below literally and let `UNSUPPORTED_*`
+return early, which let an attacker without the key turn `BAD_SIGNATURE` / `REWRITTEN` into "could not judge").
+The order that is implemented and specified is in spec section 6.1: `UNSUPPORTED_*` are remembered, every other
+check runs, and they are reported only when nothing definite was found.*
+
 All checks keep the existing order: read rules → chain (`TAMPERED_LEDGER`) → signatures → field rules → anchors.
-The algorithm is looked at in the signature step, *after* the hash has held.
+The algorithm is looked at in the signature step, *after* the hash has held, and an unsupported one defers.
 
 ### 3.1 Statuses
 
