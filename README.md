@@ -214,7 +214,7 @@ Merkle proofs and RFC 3161 timestamps are not implemented yet.
 
 ```bash
 auditrail report evidence.jsonl --pubkey keys/recorder.pub --witness-file witness-copy.jsonl --max-gap 120 \
-    --format all --out report          # writes report.md, report.html, report.json; exit 0 only if no finding
+    --format all --out report          # writes report.md, report.html, report.json; exit 0 only if no check had a finding
 ```
 
 The report says what the checks found, what they did **not** examine, and, in a section that cannot be switched
@@ -228,7 +228,7 @@ Markdown syntax in them cannot add a section or a link) and labelled as supplied
 says what ran and what did not from the outcomes, not from the flags (an empty witness file, an empty ledger or a
 ledger reconciled against itself is named as such). Failures to write are a one-line error with exit 2; an existing
 `--out` file is refused unless `--force`, and an input file is never overwritten. `stdout` is written as UTF-8 with
-LF line ends, the same bytes as `--out`. Exit code 0 means no finding; 1 means a finding **or an inconclusive result**, which is not necessarily tampering; 2 means the report could not be produced. A `--redact-salt` is passed on the command line, so it is visible in the process list and shell history.
+LF line ends, the same bytes as `--out`. Exit code 0 means the main ledger and every check you supplied (including peer ledgers) found nothing; 1 means any finding **or an inconclusive result**, which is not necessarily tampering (a problem with a peer ledger gives 1 while the main ledger's own status stays as it is, listed under `overall.secondary` in the JSON); 2 means an input or the output could not be read or written. A `--redact-salt` is passed on the command line, so it is visible in the process list and shell history.
 
 To see the whole path in one go (an agent, a signature, a witness copy, one record altered, the verifier catching it,
 two reports), on Windows or Linux:
@@ -238,6 +238,23 @@ python -m examples.mvp_demo.run
 ```
 
 In that demonstration the agent and the key are on one machine, so it shows the mechanism, not a deployment.
+
+### Reading a report
+
+A report is easy to over-read. The points below are what it does not say; the full, fixed list is in its last section.
+
+1. **"No inconsistency found" is not "safe".** It means the checks that ran, over the records they covered, found nothing; the report lists what ran and what did not.
+2. **It covers only the tools the recorder wrapped.** An action by a tool that was not wrapped leaves no record, and the report cannot see it.
+3. **An unreadable or empty input is not a clean one.** An empty ledger, an empty witness file or a v0.1 ledger is reported as not examined, never as consistent.
+4. **Without a key, a consistent chain proves little.** Anyone who could write the file could have rewritten it consistently; check signatures with a key you trust.
+5. **Without an independent witness copy, removal or rewriting of records is not detectable**, and records after the last anchor are not covered by it.
+6. **A witness is only as independent as the people who hold it.** If the operator controls the witness copy, it adds little.
+7. **"Trusted" key means supplied, not verified.** The tool does not check where a key file came from.
+8. **A matched message pair shows two records agree, not that the other side is independent.** The same signing key on both sides is a clue that it is not; a different key does not prove that it is.
+9. **Exit code 1 is a finding or an inconclusive result, not necessarily tampering.** `UNSUPPORTED_*` can be provoked by editing a field and never means "untouched".
+10. **The report is not signed and can be edited**; its fingerprint helps compare two copies, it does not vouch for the content.
+11. **`--redact` is masking, not anonymisation.** The codes are not secrets, several fields stay visible, and the title and note are never masked.
+12. **The report was produced from the files you gave it.** If the recorder's host or key was compromised, none of it holds.
 
 ## Quickstart
 
@@ -321,7 +338,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 751 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 759 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and
