@@ -161,8 +161,14 @@ need the owner's `anchors.jsonl` at all. Anchors contain only hashes and times.
 
 ## 6. Verification
 
-Run these checks in order and stop at the first failure. Each failure has a
-status; the optional inputs decide which checks run.
+Run these checks in order; the optional inputs decide which checks run. Each failure has a status.
+
+A **definite** finding (every status except `UNSUPPORTED_ALGORITHM` and `UNSUPPORTED_FORMAT`) ends the
+verification at once, at the first place the order below reaches it. `UNSUPPORTED_ALGORITHM` and
+`UNSUPPORTED_FORMAT` do **not**: they are inconclusive and can be provoked by anyone who can edit the file (add a
+`sig_alg`, set `format` to 3), so a verifier remembers the first one it meets, carries on with every other
+check, and reports it only if nothing definite was found. Otherwise an attacker without the key could turn a
+`BAD_SIGNATURE` or `REWRITTEN` into "could not judge".
 
 | # | check | failure status |
 |---|---|---|
@@ -180,19 +186,55 @@ every check it was not asked to run. A verifier that prints a bare "OK" is not c
 `SINK_UNREACHABLE` (a configured witness could not be read) is not tampering
 evidence, but the verifier MUST NOT claim the anchor was checked.
 
-Two further statuses are *inconclusive*, not alarms:
+### 6.1 Precedence (the order both reference implementations follow)
+
+1. **Reading** (section 2): not UTF-8, an unparseable line or a forbidden value is `TAMPERED_LEDGER`; a first
+   record with no `"format":` member is `LEGACY_FORMAT`.
+2. **Records, in `seq` order, one record at a time**, each record in this order:
+   1. `seq`, `prev_hash`, `hash` → `TAMPERED_LEDGER`;
+   2. `format` an integer other than 2 → *remember* `UNSUPPORTED_FORMAT`, go on (the record is then still
+      checked as below);
+   3. if keys were given: `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `MALFORMED_RECORD` (`sig_alg`); an algorithm this
+      verifier does not implement → *remember* `UNSUPPORTED_ALGORITHM` and do not judge that record's signature;
+      a record naming an algorithm other than its key's, or a signature that does not verify → `BAD_SIGNATURE`;
+   4. the field rules (2b) → `MALFORMED_RECORD`.
+   The first definite finding in this walk ends the verification, so an earlier record's `MALFORMED_RECORD`
+   outranks a later record's `TAMPERED_LEDGER`.
+3. **The owner's anchors file**: line checks (`TAMPERED_ANCHOR`, `UNSIGNED_ANCHOR`, `UNKNOWN_KEY`,
+   `BAD_SIGNATURE`; a line whose algorithm is not implemented is remembered and the line is still compared with
+   the ledger), then `TRUNCATED` / `REWRITTEN`, then the witness sinks (`SINK_UNREACHABLE`, `SINK_MISMATCH`).
+4. **The witness copy**: the same, line by line.
+5. **Heartbeats** (if a maximum gap was given): `NO_HEARTBEAT`, `UNRECORDED_CALLS`, `HEARTBEAT_GAP`.
+6. Only now, if nothing definite was found: the **remembered** `UNSUPPORTED_*` (the earliest one in the order
+   above), with `anchored_upto` / `unanchored_tail` of what *was* covered; otherwise `OK`.
+
+Conformance vectors 25-32 pin this order (an edit plus a `sig_alg` or `format: 3` is reported by the witness or the
+signature; a genuine unsupported-algorithm ledger is `UNSUPPORTED_ALGORITHM` with its coverage).
+
+### 6.2 The two inconclusive statuses
+
+`UNSUPPORTED_ALGORITHM` and `UNSUPPORTED_FORMAT` are *inconclusive, not OK*. They are failures (exit code 1).
+They are **not** evidence of tampering and they are **not** evidence of its absence: someone without the key can
+cause either one by editing the file, so a result of this kind never means the records were left alone.
 
 - `UNSUPPORTED_ALGORITHM`: trusted keys were given and a record (or anchor) names an algorithm this verifier does
   not implement, so its signature could not be checked. It is **not** `OK`: a verifier MUST NOT report `OK` for a
-  ledger in which any covered record used an algorithm it did not check while signatures were required. It is not
-  evidence of tampering either. Without trusted keys signatures are not checked at all; the result may be `OK`
-  and MUST list the algorithms it could not check.
+  ledger in which any covered record used an algorithm it did not check while signatures were required.
+  Without trusted keys signatures are not checked at all; the result may be `OK` and MUST list the algorithms
+  it could not check (records and anchors).
 - `UNSUPPORTED_FORMAT`: a record's `format` is an integer other than `2` although its hash holds. A ledger
   whose hash rule differs will fail as `TAMPERED_LEDGER` before this is reached; that is a limit of reading a
   format one does not know.
 
 When two verifiers implement different algorithms, each answers from its own set; for an algorithm only one
 implements, the other MUST answer `UNSUPPORTED_ALGORITHM` and never `OK`.
+
+**Machine-readable reports.** The JSON a verifier prints is not part of the evidence format. The member
+`unchecked_algorithms` (the algorithm tokens, in records or anchors, that were not checked) was added with this
+change and is an *additive* member: it is present on `OK` and on `UNSUPPORTED_*` results of both reference
+implementations, and the Rust verifier prints it (as `[]`) on every result while the Python one omits it on
+definite failures. A consumer MUST NOT assume the member is always present, and MUST treat a missing member as
+"none".
 
 ## 7. Key custody (what makes the signatures mean something)
 
