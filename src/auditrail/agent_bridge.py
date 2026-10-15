@@ -105,9 +105,12 @@ class SqliteReplayGuard(ReplayStore):
         self.ttl_seconds = ttl_seconds
         self._clock = clock
         self._busy = busy_timeout_s
-        with self._connect() as conn:
+        conn = self._connect()
+        try:  # autocommit mode: nothing to commit; the connection is closed explicitly, not left to the collector
             conn.execute("CREATE TABLE IF NOT EXISTS replay (nonce TEXT PRIMARY KEY, seen_at REAL NOT NULL)")
             conn.execute("CREATE INDEX IF NOT EXISTS replay_seen_at ON replay (seen_at)")
+        finally:
+            conn.close()
         try:
             os.chmod(self.path, 0o600)  # no effect on Windows, where ACLs apply
         except OSError:
