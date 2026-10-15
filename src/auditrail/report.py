@@ -503,6 +503,9 @@ def _redact(data: dict, records: list, agents, salt: Optional[str], input_paths:
             if t:
                 withheld[t] = "(name withheld)"
     word_map = {**flat, **withheld}
+    for n, code in flat.items():  # the verifier embeds some names with repr(); those spellings are replaced too
+        word_map.setdefault(repr(n), code)
+        word_map.setdefault(repr(n)[1:-1], code)
     rx = None
     if word_map:
         alt = "|".join(re.escape(n) for n in sorted(word_map, key=len, reverse=True))
@@ -515,8 +518,10 @@ def _redact(data: dict, records: list, agents, salt: Optional[str], input_paths:
         return maps[kind].get(v, v) if isinstance(v, str) else v
 
     out = json.loads(json.dumps(data))  # a private copy; the caller's structure is not modified
+    held = ("The recorder counted calls it intercepted but did not record; the verifier's detail is withheld "
+            "under --redact because it embeds a name.")
     for sec in (out["overall"], out["chain"]):
-        sec["detail"] = text(sec.get("detail", ""))
+        sec["detail"] = held if sec.get("status") == "UNRECORDED_CALLS" else text(sec.get("detail", ""))
     for key in ("anchors", "witness"):
         sec = out[key]
         if "detail" in sec:
@@ -526,7 +531,7 @@ def _redact(data: dict, records: list, agents, salt: Optional[str], input_paths:
                 row["sink_ref"] = "(withheld)"
     hb = out["heartbeats"]
     if "detail" in hb:
-        hb["detail"] = text(hb["detail"])
+        hb["detail"] = held if hb.get("status") == "UNRECORDED_CALLS" else text(hb["detail"])
     if "recorders" in hb:
         hb["recorders"] = sorted(val("recorder", x) for x in hb["recorders"])
         hb["tool_lists"] = sorted(val("tool", x) for x in hb["tool_lists"])

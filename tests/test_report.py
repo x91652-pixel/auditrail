@@ -535,3 +535,21 @@ def test_the_h2_count_is_fixed_for_a_failed_ledger_too(world):
     bad = edit_without_rehash(w)
     data = build_report(bad, **args_for(w, title=FORGERY))
     _assert_no_forgery(render_md(data), render_html(data))
+
+
+# ---------------------------------------------------------------- T-038 C-2: names the verifier embeds with repr()
+
+@pytest.mark.parametrize("rec", ["pay\troll", "pay\x01roll", "pay‮roll", "pay\roll", "pay'roll\"", "薪資-payroll"])
+def test_c2_a_recorder_name_that_repr_escapes_does_not_leak(tmp_path, rec):
+    signer = Signer.from_seed(SEED)
+    led = Ledger(tmp_path / "l.jsonl", signer=signer, fsync=False)
+    led.record_heartbeat(recorder_id=rec, tools=["t"], policy_version="p", policy_hash="ab" * 32,
+                         calls_attempted=3, calls_recorded=1, interval_s=60)
+    (tmp_path / "k.pub").write_text(signer.public_hex + "\n", encoding="utf-8")
+    data = build_report(tmp_path / "l.jsonl", public_key_paths=[tmp_path / "k.pub"], max_gap_s=3600, redact=True)
+    assert data["overall"]["status"] == "UNRECORDED_CALLS"
+    forms = {rec, repr(rec), repr(rec)[1:-1], rec.encode("unicode_escape").decode("ascii")}
+    for text in (render_md(data), render_html(data), render_json(data)):
+        for f in forms:
+            assert f not in text, repr(f)
+        assert "payroll" not in text and "pay" not in text.replace("payload", "")
