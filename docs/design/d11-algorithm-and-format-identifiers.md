@@ -109,6 +109,11 @@ bind the algorithm so two key types cannot share an id) is deferred with the key
 
 ## 3. What readers do
 
+*D-14 (after the second review, T-030): a record or anchor that claims an algorithm other than its trusted key's
+is `BAD_SIGNATURE` ("algorithm mismatch") **before** the implemented-or-not check, so `UNSUPPORTED_ALGORITHM` is
+reached only for a key explicitly registered as a type the verifier cannot check; for `.pub` file input it cannot
+occur. This supersedes the table in 3.1 where it says an unimplemented token with keys is `UNSUPPORTED_ALGORITHM`.*
+
 *Corrected after T-026 (the first implementation followed the order below literally and let `UNSUPPORTED_*`
 return early, which let an attacker without the key turn `BAD_SIGNATURE` / `REWRITTEN` into "could not judge").
 The order that is implemented and specified is in spec section 6.1: `UNSUPPORTED_*` are remembered, every other
