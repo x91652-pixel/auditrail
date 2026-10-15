@@ -595,6 +595,8 @@ def _doc(data: dict) -> tuple[list, list]:
 
     def ex_of(status):
         e = explain(status)
+        if o.get("secondary") and status == "OK" and not empty_ok:
+            e = {**e, "means": "The checks on the main ledger found no inconsistency in the records they covered."}
         if empty_ok and status == "OK":
             e = {**e, "means": "The ledger held no records, so no check had anything to examine."}
         return e
@@ -622,6 +624,10 @@ def _doc(data: dict) -> tuple[list, list]:
     # 1 Result
     B.append(("h2", "1. Result"))
     empty = data.get("scope") is not None and data["scope"].get("records") == 0
+    if o.get("secondary"):
+        B.append(("p", "A check on another party's ledger did not come out clean: see section 9. The exit code is at "
+                       "least 1 for that reason."))
+        B.append(("p", f"The main ledger's result is {o['status']}."))
     if o["status"] == "OK" and empty:
         B.append(("p", "The ledger holds no records. Nothing was examined, and this is not a statement about "
                        "anything that may have happened."))
@@ -637,10 +643,7 @@ def _doc(data: dict) -> tuple[list, list]:
     else:
         at = f" at seq {o['bad_seq']}" if o.get("bad_seq") is not None else ""
         B.append(("p", f"A finding was made: {o['status']}{at} ({ex['label']})."))
-    if o.get("secondary"):
-        B.append(("p", f"The main ledger's result is {o['status']}. A check on another party's ledger did not come out "
-                       "clean: see section 9. The exit code is at least 1 for that reason."))
-    B.append(("p", f"Verifier status: {o['status']}. {ex['means']}"))
+    B.append(("p", f"Verifier status{' (main ledger)' if o.get('secondary') else ''}: {o['status']}. {ex['means']}"))
     if o.get("detail"):
         B.append(("p", f"Verifier's original wording: {o['detail']}"))
     B.append(("p", "This report is not signed and can be edited after it was made. Its fingerprint is a hash that makes "

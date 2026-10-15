@@ -219,8 +219,8 @@ def test_c4_no_anchor_given_is_said_directly(env):
 # --- T-040 P-1: an unclean check on another party's ledger changes the exit code and is on the first screen
 from auditrail.cli import main  # noqa: E402
 
-SENTENCE = ("The main ledger's result is OK. A check on another party's ledger did not come out clean: "
-            "see section 9.")
+SENTENCE = ("A check on another party's ledger did not come out clean: see section 9. The exit code is at "
+            "least 1 for that reason.")
 
 
 def _pair(w, signer, peer_signer=None):
@@ -294,3 +294,24 @@ def test_b_the_redaction_note_gives_the_reason_key_ids_stay_visible(env):
     w, _ = env
     md = render_md(build_report(w / "l.jsonl", redact=True))
     assert "Key ids are left visible because they are the identifier you compare with the --pubkey file" in md
+
+
+def test_t042_with_a_secondary_finding_the_unclean_sentence_comes_first_and_ok_is_limited_to_the_main_ledger(env):
+    w, signer = env
+    a, b = _break_peer("tampered", w, signer)
+    md = render_md(build_report(a, public_key_paths=[w / "k.pub"], peer_ledgers=[b]))
+    res = md.split("## 1. Result")[1].split("## 2.")[0]
+    first_para = [x for x in res.split("\n\n") if x.strip() and not x.startswith("###")][0]
+    assert first_para.startswith(SENTENCE)
+    assert res.index("found no inconsistency") > res.index("did not come out clean")
+    assert "Verifier status \(main ledger\): OK." in res
+    assert "The checks that were run found no inconsistency in the evidence they covered" not in md.split("## 10.")[0]
+    assert "The main ledger's result is OK." in res
+
+
+def test_t042_without_a_secondary_finding_the_wording_is_unchanged(env):
+    w, signer = env
+    a, b = _pair(w, signer)
+    md = render_md(build_report(a, public_key_paths=[w / "k.pub"], peer_ledgers=[b]))
+    assert "(main ledger)" not in md and "did not come out clean" not in md
+    assert "Verifier status: OK. The checks that were run found no inconsistency in the evidence they covered." in md
