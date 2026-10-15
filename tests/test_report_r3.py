@@ -132,7 +132,8 @@ def test_not_checked_with_nothing_to_list_carries_no_reassurance(env, tmp_path):
     md = render_md(data)
     nc = md.split("### Not checked")[1].split("## 2.")[0]
     assert "Every check that was requested ran" not in md
-    assert "No additional item was left unchecked. The limits of the checks themselves are in section 10." in nc
+    assert "Nothing further was requested. The limits of the checks themselves are in section 10." in nc
+    assert "No additional item was left unchecked" not in md
 
 
 def test_the_result_carries_the_added_fixed_sentences(env):
@@ -185,3 +186,29 @@ def test_c3_peer_keys_and_record_counts_are_printed_and_same_key_is_flagged(env)
     nokey = render_md(build_report(w / "a.jsonl", peer_ledgers=[w / "b.jsonl"]))
     assert "Peer ledger signatures were not checked" in nokey
     assert "were not checked \(no public key was given\)" in nokey.split("## 9.")[1]
+
+
+# --- T-038 C-4: no reassurance where nothing was examined
+LEGACY = Path(__file__).resolve().parent / "fixtures" / "legacy_v01_ledger.jsonl"
+
+
+def test_c4_legacy_ledger_says_it_was_not_examined(env):
+    md = render_md(build_report(LEGACY))
+    res, ran, nc = lists(md)
+    assert "The ledger was not examined \(v0.1 format; see LEGACY_FORMAT\)." in nc
+    for reassurance in ("Nothing further was requested", "No additional item was left unchecked"):
+        assert reassurance not in md
+
+
+def test_c4_empty_ledger_has_no_reassurance_in_not_checked(env):
+    w, _ = env
+    (w / "e.jsonl").write_text("", encoding="utf-8")
+    md = render_md(build_report(w / "e.jsonl", public_key_paths=[w / "k.pub"], max_gap_s=60))
+    assert "Nothing further was requested" not in md and "No additional item was left unchecked" not in md
+
+
+def test_c4_no_anchor_given_is_said_directly(env):
+    w, _ = env
+    md = render_md(build_report(w / "l.jsonl", public_key_paths=[w / "k.pub"]))
+    assert "no anchor was given \(or the file held none\)" in md.split("## 2.")[0]
+    assert "or no anchor was given" not in md

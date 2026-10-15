@@ -407,6 +407,13 @@ def build_report(
     readable = chain_state in ("consistent", "inconclusive", "failed")
     nc = []
     ran = []
+    if chain_state == "legacy":
+        nc.append("The ledger was not examined (v0.1 format; see LEGACY_FORMAT).")
+    elif chain_state == "unreadable":
+        nc.append("The ledger could not be read, so nothing was examined (see the verifier status).")
+    elif overall["status"] in ("UNSUPPORTED_ALGORITHM", "UNSUPPORTED_FORMAT"):
+        nc.append("Records or anchors in a format or algorithm this verifier does not implement could not be "
+                  f"checked ({overall['status']}); the result is incomplete.")
     if n_records == 0 and evaluable:
         nc.append("The ledger holds no records: nothing was examined, so no check had anything to find.")
     elif readable:
@@ -629,15 +636,20 @@ def _doc(data: dict) -> tuple[list, list]:
                    "see it."))
     cov = data.get("coverage")
     if cov is not None and cov["unanchored_tail"]:
-        B.append(("p", f"Records {cov['tail_first_seq']} to {cov['tail_last_seq']} ({cov['unanchored_tail']} record(s)) "
-                       "come after the last anchor held by a witness, or no anchor was given. Changes in that range "
-                       "cannot be detected by anchors; without keys, or with only a witness copy, the result for "
-                       "them is OK with a note."))
+        rng = f"Records {cov['tail_first_seq']} to {cov['tail_last_seq']} ({cov['unanchored_tail']} record(s))"
+        if cov["anchored_upto"] is None:
+            B.append(("p", f"{rng}: no anchor was given (or the file held none), so no record is covered by an "
+                           "anchor. Removal or rewriting of records cannot be detected by anchors; without keys, or "
+                           "with only a witness copy, the result for them is OK with a note."))
+        else:
+            B.append(("p", f"{rng} come after the last anchor held by a witness. Changes in that range cannot be "
+                           "detected by anchors; without keys, or with only a witness copy, the result for them is "
+                           "OK with a note."))
     B.append(("h3", "Checks that ran"))
     ran = list(data.get("checks_ran") or []) or ["No check ran over any record."]
     B.append(("ul", ran))
     B.append(("h3", "Not checked"))
-    B.append(("ul", data["not_checked"] or ["No additional item was left unchecked. The limits of the checks "
+    B.append(("ul", data["not_checked"] or ["Nothing further was requested. The limits of the checks "
                                             "themselves are in section 10."]))
 
     # 2 Examined
