@@ -802,7 +802,8 @@ def _doc(data: dict) -> tuple[list, list]:
         F.append(("h3", group))
         F.append(("ul", leads))
     F.append(("p", f"Source of the list above: SECURITY.md (sha256 {sha}). Read it for the conditions attached to "
-                   "each statement. The lines above are quotations; words in them about certification or "
+                   "each statement. The generated list records the file's hash only; which commit or date it came "
+                   "from is not recorded. The lines above are quotations; words in them about certification or "
                    "compliance appear only in negations."))
     return B, F
 

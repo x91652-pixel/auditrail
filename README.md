@@ -220,8 +220,15 @@ auditrail report evidence.jsonl --pubkey keys/recorder.pub --witness-file witnes
 The report says what the checks found, what they did **not** examine, and, in a section that cannot be switched
 off, what no report of this kind proves. It is deterministic (same input, same bytes; add `--generated-at now` for a
 timestamp), self-contained HTML, makes no network call, is not signed, and is a rendering of `verify`'s result, not
-new evidence. `--redact` replaces agent, tool and recorder names with stable digests; `--title` and `--note` are
-printed escaped and labelled as not examined.
+new evidence. `--redact` replaces the names of agents, tools and recorders by codes in the fields that carry them
+(never the status words or the structure); the codes are **not secrets** (a guessable name can be recovered), so add
+`--redact-salt SECRET` if that matters, and note that policy versions, timestamps, counts and input hashes are not
+masked, nor is anything you put in `--title` or `--note`. Those two are printed on one line, escaped (a newline or
+Markdown syntax in them cannot add a section or a link) and labelled as supplied and not examined. The first screen
+says what ran and what did not from the outcomes, not from the flags (an empty witness file, an empty ledger or a
+ledger reconciled against itself is named as such). Failures to write are a one-line error with exit 2; an existing
+`--out` file is refused unless `--force`, and an input file is never overwritten. `stdout` is written as UTF-8 with
+LF line ends, the same bytes as `--out`.
 
 To see the whole path in one go (an agent, a signature, a witness copy, one record altered, the verifier catching it,
 two reports), on Windows or Linux:
@@ -314,7 +321,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 686 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 733 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and

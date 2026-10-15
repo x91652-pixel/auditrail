@@ -56,7 +56,7 @@ Be skeptical of any tool (including this one) that does not say this part out lo
 
 - **No supply-chain verification (ASI04), no memory/context-poisoning detection (ASI06), no cascading-failure containment (ASI08)** beyond what the above gives.
 - **No steganography detection.** There is no known technique that guarantees it; the ledger is an evidence layer for after-the-fact analysis, not a detector.
-- **`auditrail report` is a rendering of the verifier's output, not new evidence.** It adds no check of its own: its overall status is the verifier's, it is not signed, and its wording is a fixed table plus a vocabulary test, not a review of every sentence. Read the report together with the evidence and the witness copy, not instead of them.
+- **`auditrail report` is a rendering of the verifier's output, not new evidence.** It adds no check of its own: its overall status is the verifier's, it is not signed, and its wording is a fixed table plus a vocabulary test, not a review of every sentence. Read the report together with the evidence and the witness copy, not instead of them. `--redact` replaces names in the fields that carry them with codes that are not secrets (a guessable name can be recovered, and policy versions, timestamps and counts stay visible); it is not anonymisation.
 - **Not a certified compliance product.** Nothing here has had an independent audit. Do not represent its output as satisfying NYC Local Law 144, the EU AI Act, ISO/IEC 42001 or any other requirement without your own legal and compliance review.
 
 ## Where the tests do not reach

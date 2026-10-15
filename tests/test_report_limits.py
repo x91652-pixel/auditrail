@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from auditrail import _limits
+from auditrail import _limits, report
 from auditrail.report import LIMITS_FLOOR, build_report, render_html, render_json, render_md
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +73,7 @@ def test_every_generated_limit_is_printed_in_every_format(tmp_path):
     assert len(_limits.ITEMS) >= 20
     assert [x["statement"] for x in js["does_not_prove"]["from_security_md"]] == [s for _, s in _limits.ITEMS]
     for _group, statement in _limits.ITEMS:
-        assert htmllib.escape(statement, quote=False) in md
+        assert report._md_text(statement) in md
         assert htmllib.escape(statement, quote=True) in html_
     assert _limits.SOURCE_SHA256 in md and _limits.SOURCE_SHA256 in html_
     assert js["does_not_prove"]["security_md_sha256"] == _limits.SOURCE_SHA256
