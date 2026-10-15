@@ -210,6 +210,28 @@ so anchor hashes should also be copied to a third party periodically. Anchors ma
 with `--key` are signed (anchor_version 2, see [the format spec](docs/spec/evidence-format-v2.md));
 Merkle proofs and RFC 3161 timestamps are not implemented yet.
 
+## A readable report
+
+```bash
+auditrail report evidence.jsonl --pubkey keys/recorder.pub --witness-file witness-copy.jsonl --max-gap 120 \
+    --format all --out report          # writes report.md, report.html, report.json; exit 0 only if no finding
+```
+
+The report says what the checks found, what they did **not** examine, and, in a section that cannot be switched
+off, what no report of this kind proves. It is deterministic (same input, same bytes; add `--generated-at now` for a
+timestamp), self-contained HTML, makes no network call, is not signed, and is a rendering of `verify`'s result, not
+new evidence. `--redact` replaces agent, tool and recorder names with stable digests; `--title` and `--note` are
+printed escaped and labelled as not examined.
+
+To see the whole path in one go (an agent, a signature, a witness copy, one record altered, the verifier catching it,
+two reports), on Windows or Linux:
+
+```bash
+python -m examples.mvp_demo.run
+```
+
+In that demonstration the agent and the key are on one machine, so it shows the mechanism, not a deployment.
+
 ## Quickstart
 
 ```bash
