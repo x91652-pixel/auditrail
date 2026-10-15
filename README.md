@@ -2,7 +2,16 @@
 
 **Tamper-evident audit trails and a "lethal trifecta" policy guard for AI agents.**
 
-`pip install -e .` today; `pip install auditrail` once it's on PyPI (not yet -- see Status below).
+Not on PyPI yet: to try it, follow the [Quickstart](#quickstart).
+
+> **In plain words.** An AI agent can read private data, read text from untrusted places, and send things out. When all
+> three happen in one session (the "lethal trifecta"), a trick hidden in the text can make it leak the data. auditrail
+> is a small library that can refuse a tool call that would complete that combination, and that writes each decision
+> to a log in which every entry is chained to the one before it (changing an old entry breaks every later one) and
+> signed by a separate *recorder*, so someone who does not trust you can later check the log with only a public key.
+> A *witness* is a place outside the operator's control that keeps a copy of the log's latest fingerprint (an
+> *anchor*); a *heartbeat* is a periodic entry in which the recorder says which tools it wraps. It covers only the
+> tools you wrapped, does not detect prompt injection, and is not a compliance product.
 
 > **Status and what this is not.** Early (v0.2), not on PyPI, with no independent security review. The evidence
 > format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
@@ -62,14 +71,15 @@ combines all three can be tricked into leaking private data.
 
 **auditrail gives an agent session a policy engine that refuses to
 complete that trio, and a tamper-evident log of every decision it made
-along the way** -- so when something does go wrong, you can prove what
-the agent saw, what it was allowed to do, and whether the record of that
-has been altered since.
+along the way** -- so that afterwards you can check which calls to
+wrapped tools were allowed or refused and why, and whether that record has been altered since (given a signing
+key the operator cannot reach and a witness copy it does not control). The ledger stores digests of arguments and
+results, not what the agent "saw".
 
 ## What it actually does (v0.2)
 
 auditrail is the smallest component that lets someone who does **not** trust you
-check what an agent did. It is a library plus a standalone verifier, not a
+check what an agent did through the tools you wrapped. It is a library plus a standalone verifier, not a
 governance platform; it is meant to sit next to the gateways and guardrails you
 already use.
 
@@ -135,7 +145,11 @@ replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by ev
 These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
 see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
 
-## Evidence the operator cannot quietly rewrite
+## Evidence that can be checked without trusting the operator
+
+This holds only if the recorder key is kept where neither the agent nor the operator's own process can read it, and
+the witness copy is held by someone the operator does not control. Without those two, see the limits in
+[SECURITY.md](SECURITY.md).
 
 ```bash
 # 1. a recorder key, kept where the agent process cannot read it
@@ -169,14 +183,21 @@ or from a release download.
 The verifier prints `OK` only with a list of what it did **not** check (no key
 given, no witness, no heartbeat limit, records after the last anchor).
 
-### Getting the verifier without Python or Rust
+### Getting the standalone verifier
 
-`auditrail-verify` is a single static file. Pushing a tag `v*` runs
-[`release.yml`](.github/workflows/release.yml), which builds it for Linux x86_64, Windows x86_64 and macOS
-(Apple silicon and Intel), runs the conformance vectors against each native build, and publishes the files with a
-`SHA256SUMS` list and GitHub build-provenance attestations.
+`auditrail-verify` is a single static file written in Rust. **No release has been published yet**, so for now you build
+it:
 
-> **No release has been published yet.** Until one is, build it yourself: `cd verifier && cargo build --locked --release`.
+- Linux: `sudo apt install cargo` (or install Rust with rustup); Windows: install [rustup](https://rustup.rs/) and the
+  Visual Studio C++ build tools it asks for; macOS: rustup.
+- Then, from the repository root: `cd verifier && cargo build --locked --release`.
+- The binary is `verifier/target/release/auditrail-verify` (`.exe` on Windows); check it with
+  `verifier/target/release/auditrail-verify --version`.
+
+Once a release exists (pushing a tag `v*` runs [`release.yml`](.github/workflows/release.yml), which builds it for
+Linux x86_64, Windows x86_64 and macOS Apple silicon and Intel, runs the conformance vectors against each native
+build, and publishes the files with a `SHA256SUMS` list and GitHub build-provenance attestations), the download steps
+will be as below. **They do not work today, because `v0.2.0` does not exist.**
 
 ```bash
 gh release download v0.2.0 --repo x91652-pixel/auditrail --pattern 'auditrail-verify-linux-x86_64' --pattern SHA256SUMS
@@ -279,48 +300,77 @@ A report is easy to over-read. The numbered points below are what it does not sa
 
 ## Quickstart
 
+Needs Python 3.9 or newer. Work in a virtual environment (modern Debian and Ubuntu refuse a system-wide `pip install`
+with "externally-managed-environment").
+
 ```bash
+# Linux / macOS (on Ubuntu first: sudo apt install python3-venv python3-pip)
 git clone https://github.com/x91652-pixel/auditrail
 cd auditrail
-pip install -e ".[dev]"
-
-# No API key needed -- runs entirely offline, exercises every real code
-# path: an allowed pipeline, a trifecta block, a signed agent message
-# (and a rejected forged/replayed one), and tamper detection.
-python -m examples.mock_demo
-
-# or, after install:
-auditrail demo
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e .            # just to try it; use  pip install -e ".[dev]"  only if you want to run the tests
 ```
 
-Verify any ledger's integrity independently (the demo writes `examples/demo_ledger.jsonl`;
-`*.jsonl` is git-ignored, so the file exists only after you have run the demo):
+```powershell
+# Windows PowerShell -- no activation needed, so the execution policy does not matter
+git clone https://github.com/x91652-pixel/auditrail
+cd auditrail
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e .
+# then run everything below as  .venv\Scripts\python.exe -m ...  and  .venv\Scripts\python.exe -m auditrail.cli ...
+# (activating with .venv\Scripts\Activate.ps1 fails under the default Restricted policy; if you want it,
+#  run  Set-ExecutionPolicy -Scope Process Bypass  in that window only)
+```
+
+Below, `python` means the virtual environment's Python (after activating it, `python` works on Linux too; without
+activating, use `python3` or the `.venv` path) and `auditrail` is the command `pip install` created in it.
+
+Two demos, which write to different places:
 
 ```bash
+# 1. the repository's example: writes examples/demo_ledger.jsonl
+python -m examples.mock_demo
 auditrail verify examples/demo_ledger.jsonl
+
+# 2. the installed command: writes to your temporary directory; the last line of its output names the file
+auditrail demo
+auditrail verify <the path printed on that last line>
 ```
 
-Wrap a real tool function in ~5 lines:
+Both run on your machine with no API key. **Each makes one real HTTP request** (to `https://api.github.com/zen`, with
+a 3 second timeout) to exercise an external-communication tool; if you are offline that step is skipped and
+everything else still runs. They exercise an allowed pipeline, a trifecta block, a signed agent message (and a
+rejected forged or replayed one), and tamper detection.
+
+The demos write an unsigned ledger (`*.jsonl` is git-ignored, so the file exists only after you run the demo).
+`verify` therefore reports what it did **not** check: signatures, anchors and heartbeats.
+
+Wrap a tool function (run from any directory once the package is installed; this is the whole file):
 
 ```python
 from auditrail import Guard, Ledger, PolicyEngine
 
-policy = PolicyEngine.from_yaml("policies/example_policy.yaml")
-ledger = Ledger("evidence.jsonl")        # no signer: records are hash-chained but not signed
-guard = Guard(policy, ledger)
+# a minimal policy, inline so nothing else is needed
+POLICY = {
+    "version": "quickstart",
+    "agents": {"hr-screener": {"allowed_tools": ["read_resume"],
+                               "tool_categories": {"read_resume": ["data_access"]}}},
+    "default": {"allowed_tools": [], "enforce_lethal_trifecta": True},
+}
+guard = Guard(PolicyEngine(POLICY), Ledger("evidence.jsonl"))   # no signer: hash-chained, not signed
 
 @guard.guarded_tool("read_resume", categories=["data_access"])
 def read_resume(candidate_id: str) -> dict:
-    return db.fetch_resume(candidate_id)   # your real function, unchanged
+    return {"candidate": candidate_id, "years_experience": 7}   # stand-in for your real function
 
 session = guard.session(agent_id="hr-screener")
-resume = read_resume(session, "cand-001")   # policy-checked + logged automatically
+print(read_resume(session, "cand-001"))        # policy-checked and logged
 ```
 
-See [`examples/mock_demo.py`](examples/mock_demo.py) for the full walkthrough
-(including the trifecta-block and tamper-detection scenarios) and
-[`examples/real_agent_demo.py`](examples/real_agent_demo.py) for a live
-example with Claude doing real tool-use (`ANTHROPIC_API_KEY` required).
+Then `auditrail verify evidence.jsonl`. See [`examples/mock_demo.py`](examples/mock_demo.py) for the full walkthrough
+(including the trifecta-block and tamper-detection scenarios), [`policies/example_policy.yaml`](policies/example_policy.yaml)
+for a policy file, and [`examples/real_agent_demo.py`](examples/real_agent_demo.py) for a live example with Claude
+doing real tool-use (`ANTHROPIC_API_KEY` required).
 
 ## Architecture
 
