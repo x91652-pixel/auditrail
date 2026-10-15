@@ -213,7 +213,11 @@ evidence, but the verifier MUST NOT claim the anchor was checked.
 
 Conformance vectors 25-36 pin this order and the mismatch rule (an edit plus a `sig_alg` or `format: 3` is
 reported by the signature or the witness; an edit in the unanchored tail with every following record given a
-`sig_alg` is `BAD_SIGNATURE`; a genuine other-algorithm writer read with a plain `.pub` key is `BAD_SIGNATURE`).
+`sig_alg` is `BAD_SIGNATURE`; a record that carries the `key_id` of the trusted Ed25519 key but names another
+algorithm, as written by a genuine other-algorithm writer that reuses that key, is `BAD_SIGNATURE`). A writer with a
+*different* key has a different `key_id`, which a verifier given only the Ed25519 key does not know: that is
+`UNKNOWN_KEY`, as for any foreign key. A `.pub` file that does not hold exactly 32 bytes of key is refused before
+verification starts (the Rust verifier: "public key must be 32 bytes", exit code 2).
 
 ### 6.2 The two inconclusive statuses
 
