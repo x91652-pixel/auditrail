@@ -194,9 +194,12 @@ evidence, but the verifier MUST NOT claim the anchor was checked.
    1. `seq`, `prev_hash`, `hash` → `TAMPERED_LEDGER`;
    2. `format` an integer other than 2 → *remember* `UNSUPPORTED_FORMAT`, go on (the record is then still
       checked as below);
-   3. if keys were given: `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `MALFORMED_RECORD` (`sig_alg`); an algorithm this
-      verifier does not implement → *remember* `UNSUPPORTED_ALGORITHM` and do not judge that record's signature;
-      a record naming an algorithm other than its key's, or a signature that does not verify → `BAD_SIGNATURE`;
+   3. if keys were given: `UNSIGNED_RECORD`, `UNKNOWN_KEY`, `MALFORMED_RECORD` (`sig_alg`); then the **key's
+      type is compared with the algorithm the record claims** (absent = `ed25519`): a record claiming an
+      algorithm other than its key's → `BAD_SIGNATURE` ("algorithm mismatch"), *whether or not the claimed
+      algorithm is implemented*; only if they agree and this verifier does not implement that algorithm →
+      *remember* `UNSUPPORTED_ALGORITHM` and do not judge that record's signature; then a signature that does
+      not verify → `BAD_SIGNATURE`;
    4. the field rules (2b) → `MALFORMED_RECORD`.
    The first definite finding in this walk ends the verification, so an earlier record's `MALFORMED_RECORD`
    outranks a later record's `TAMPERED_LEDGER`.
@@ -208,8 +211,9 @@ evidence, but the verifier MUST NOT claim the anchor was checked.
 6. Only now, if nothing definite was found: the **remembered** `UNSUPPORTED_*` (the earliest one in the order
    above), with `anchored_upto` / `unanchored_tail` of what *was* covered; otherwise `OK`.
 
-Conformance vectors 25-32 pin this order (an edit plus a `sig_alg` or `format: 3` is reported by the witness or the
-signature; a genuine unsupported-algorithm ledger is `UNSUPPORTED_ALGORITHM` with its coverage).
+Conformance vectors 25-36 pin this order and the mismatch rule (an edit plus a `sig_alg` or `format: 3` is
+reported by the signature or the witness; an edit in the unanchored tail with every following record given a
+`sig_alg` is `BAD_SIGNATURE`; a genuine other-algorithm writer read with a plain `.pub` key is `BAD_SIGNATURE`).
 
 ### 6.2 The two inconclusive statuses
 
@@ -217,8 +221,12 @@ signature; a genuine unsupported-algorithm ledger is `UNSUPPORTED_ALGORITHM` wit
 They are **not** evidence of tampering and they are **not** evidence of its absence: someone without the key can
 cause either one by editing the file, so a result of this kind never means the records were left alone.
 
-- `UNSUPPORTED_ALGORITHM`: trusted keys were given and a record (or anchor) names an algorithm this verifier does
-  not implement, so its signature could not be checked. It is **not** `OK`: a verifier MUST NOT report `OK` for a
+- `UNSUPPORTED_ALGORITHM`: trusted keys were given, a record (or anchor) names the algorithm its **trusted key
+  is registered as**, and this verifier does not implement that algorithm, so the signature could not be
+  checked. Every key read from a `.pub` file is an Ed25519 key, so for file input this status **cannot occur**:
+  a claimed algorithm other than `ed25519` is an algorithm mismatch (`BAD_SIGNATURE`) before it can be
+  "unsupported". It remains for a verifier whose trusted keys carry an explicit type (the Python `TrustedKeys`
+  API) and for a future key-file form. It is **not** `OK`: a verifier MUST NOT report `OK` for a
   ledger in which any covered record used an algorithm it did not check while signatures were required.
   Without trusted keys signatures are not checked at all; the result may be `OK` and MUST list the algorithms
   it could not check (records and anchors).
