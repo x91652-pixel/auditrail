@@ -35,8 +35,9 @@
 For agent-to-agent calls specifically (one agent invoking another as a
 tool), `agent_bridge.sign_message` / `verify_message` sit in front of the
 same flow: the receiving agent only treats a message as authentic once
-its HMAC signature, freshness window, and (optionally) nonce uniqueness
-all check out.
+its signature, freshness window, and (optionally) nonce uniqueness
+all check out. (`sign_message` / `verify_message` are the v1 shared-secret
+HMAC form, kept for compatibility; v2 envelopes use one Ed25519 key per agent.)
 
 ## Why "categories," not "tools," drive the policy decision
 
@@ -44,17 +45,18 @@ A naive allow-list ("agent X may call tools A, B, C") says nothing about
 *combinations*. The design follows Simon Willison's "lethal trifecta":
 a single session that holds (1) access to private data, (2) exposure to
 attacker-influenceable content, and (3) a way to send data out. The
-incidents in the README describe agents in that position (each with its
-source and the conditions it needed). `policy.py` tracks categories per session and
+EchoLeak, Slack AI, ForcedLeak and the GitHub MCP case in the README describe
+agents in that position (each with its source). `policy.py` tracks categories per session and
 refuses to complete that trio, regardless of which specific tool would be
 the third leg.
 
 ## Why the ledger stores digests, not raw payloads
 
 A complete, centralized log of every tool call's real arguments and
-results would itself become the highest-value target in the system (see:
-the exposed DeepSeek database incident, which leaked exactly this kind of
-data). `Ledger.record()` hashes arguments and results with SHA-256 and
+results would itself become the highest-value target in the system (for example, [Wiz
+Research reported](https://www.wiz.io/blog/wiz-research-uncovers-exposed-deepseek-database-leak)
+in January 2025 an unauthenticated DeepSeek database whose log streams
+included chat history and API secrets). `Ledger.record()` hashes arguments and results with SHA-256 and
 stores only the digest. That's enough to *prove* a specific input/output
 pair occurred (an auditor who already has the plaintext, from your own
 systems, can hash it and confirm the match) without the ledger file

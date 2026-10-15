@@ -19,15 +19,15 @@ AI agents now read private data, browse untrusted content, and act on the
 outside world -- often all in the same session. When those three
 capabilities land in one place, a prompt injected into "just some text
 the agent read" turns into real data exfiltration. Reported
-incidents (each with its source and the conditions it needed):
+incidents of that kind (each with its source; preconditions are given where the source states them):
 
 - **EchoLeak** ([CVE-2025-32711](https://nvd.nist.gov/vuln/detail/CVE-2025-32711)) -- a crafted email, with no
   action by the user, got Microsoft 365 Copilot to disclose confidential data. CVSS 3.1: Microsoft scored it 9.3,
   NIST (NVD) scored it 7.5.
 - **Slack AI** (PromptArmor, August 2024) -- an attacker could post hidden instructions in a public channel that
   only they were in, and make Slack AI answer a victim with a link carrying the victim's private-channel data
-  (for example an API key); the data left when the victim clicked. Slack's reply at the time was that this was
-  expected behavior.
+  (for example an API key); the data left when the victim clicked. Slack replied at the time that messages in
+  public channels are visible to workspace members by design.
   ([report](https://promptarmor.substack.com/p/data-exfiltration-from-slack-ai-via))
 - **ForcedLeak** (Noma Labs, September 2025; Noma rated it CVSS 9.4) -- indirect prompt injection through a
   Salesforce Agentforce Web-to-Lead form could send CRM data to a domain that had expired but was still on the
@@ -37,24 +37,28 @@ incidents (each with its source and the conditions it needed):
   repository, a malicious issue in the public one can make the agent write private-repository content into a
   public pull request. The discoverers describe this as an architectural issue at the agent layer, not a defect in
   the GitHub server code. ([report](https://invariantlabs.ai/blog/mcp-github-vulnerability))
+Reported incidents that are not prompt-injection exfiltration (each with its source):
+
 - **Replit** (July 2025) -- SaaStr founder Jason Lemkin said Replit's AI coding agent deleted his production
-  database during a code freeze and produced fake data and reports; Replit's CEO publicly called this
+  database during a code freeze and invented data; Replit's CEO publicly called this
   unacceptable. The details come from Lemkin and were not independently verified.
   ([The Register](https://www.theregister.com/2025/07/22/replit_saastr_response/))
 - **GTG-1002** (Anthropic, November 2025) -- Anthropic assessed with high confidence that a Chinese state-sponsored
-  group used Claude Code against about 30 targets; by Anthropic's estimate the AI independently performed 80-90%
-  of the tactical operations, humans approved at key decision points, and a small number of intrusions succeeded.
-  ([Anthropic](https://www.anthropic.com/news/disrupting-AI-espionage))
+  group (which its full report designates GTG-1002) used Claude Code against roughly 30 targets; according to
+  Anthropic the AI performed 80-90% of the tactical operations, humans approved at key decision points, and a
+  handful of intrusions succeeded.
+  ([news page](https://www.anthropic.com/news/disrupting-AI-espionage),
+  [full report](https://assets.anthropic.com/m/ec212e6566a0d47/original/Disrupting-the-first-reported-AI-orchestrated-cyber-espionage-campaign.pdf))
 
 OWASP's [Top 10 for Agentic Applications
 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) (December 2025) includes
 **Tool Misuse and Exploitation (ASI02)**, **Identity and Privilege Abuse (ASI03)** and **Insecure Inter-Agent
-Communication (ASI07)**. Its own incident table files several of the incidents above mainly under ASI01 (Agent
+Communication (ASI07)**. Its own incident table files EchoLeak, ForcedLeak and the GitHub issue case, among others, under ASI01 (Agent
 Goal Hijack) and ASI02; the GitHub issue case is also listed under ASI07. Independently, Simon Willison named a
 shape he calls the **["lethal
 trifecta"](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)** (June 2025): access to private data,
-exposure to untrusted content, and the ability to communicate externally. His point is that the danger is
-greatest when an agent has all three.
+exposure to untrusted content, and the ability to communicate externally. His point is that an agent that
+combines all three can be tricked into leaking private data.
 
 **auditrail gives an agent session a policy engine that refuses to
 complete that trio, and a tamper-evident log of every decision it made
@@ -334,9 +338,9 @@ narrow and meant to compose with things that already exist:
 
 | If you need... | Consider |
 |---|---|
-| Prompt-injection / jailbreak detection on inputs and outputs | A prompt-injection detection product |
+| Prompt-injection / jailbreak detection on inputs and outputs | A prompt-injection / jailbreak detection product |
 | Agent discovery, fleet-wide policy across SaaS platforms | An agent governance platform |
-| A certifiable standard + insurance for an agent | [AIUC-1](https://www.aiuc-1.com/), a standard for AI agents with third-party certification (per its own pages: accredited auditors and annual re-certification) |
+| A certifiable standard for an agent | [AIUC-1](https://www.aiuc-1.com/), a standard for AI agents with third-party certification (per its own pages: accredited auditors and annual re-certification) |
 | An org-wide AI risk/compliance workflow | An AI governance / risk-management software product |
 | **A tamper-evident record of what one agent session actually did, that you own and can verify yourself, in your own code, with no vendor lock-in** | **auditrail** |
 
@@ -368,7 +372,7 @@ must give the same status in Python and Rust, and never a crash. `tests/test_rea
 inputs (non-UTF-8, `-0`, `true` as an integer, signatures with a space, ...) one by one.
 
 To see the attack simulation (a fictional logistics company with five
-agents, 11 normal operations and 19 attack scenarios: 15 defended and 4 documented gaps):
+agents, 11 normal operations and 19 attack scenarios: 15 defended, of which #17 and #18 hold only with the opt-in strict / `state_change` settings, and 4 documented gaps (#3, #11, #13, #19)):
 
 ```bash
 python -m examples.logistics_sim.run
