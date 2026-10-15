@@ -241,11 +241,11 @@ In that demonstration the agent and the key are on one machine, so it shows the 
 
 ### Reading a report
 
-A report is easy to over-read. The points below are what it does not say; the full, fixed list is in its last section.
+A report is easy to over-read. The numbered points below are what it does not say; the full, fixed list is in its last section.
 
 1. **"No inconsistency found" is not "safe".** It means the checks that ran, over the records they covered, found nothing; the report lists what ran and what did not.
 2. **It covers only the tools the recorder wrapped.** An action by a tool that was not wrapped leaves no record, and the report cannot see it.
-3. **An unreadable or empty input is not a clean one.** An empty ledger, an empty witness file or a v0.1 ledger is reported as not examined, never as consistent.
+3. **An unreadable or empty input is not a clean one.** An empty ledger, an empty witness file or a v0.1 ledger is reported as not examined, never as consistent. An empty ledger still exits 0 with status `OK`, and the report text says nothing was examined; an unreadable input exits 2 and no report is written.
 4. **Without a key, a consistent chain proves little.** Anyone who could write the file could have rewritten it consistently; check signatures with a key you trust.
 5. **Without an independent witness copy, removal or rewriting of records is not detectable**, and records after the last anchor are not covered by it.
 6. **A witness is only as independent as the people who hold it.** If the operator controls the witness copy, it adds little.
@@ -255,6 +255,11 @@ A report is easy to over-read. The points below are what it does not say; the fu
 10. **The report is not signed and can be edited**; its fingerprint helps compare two copies, it does not vouch for the content.
 11. **`--redact` is masking, not anonymisation.** The codes are not secrets, several fields stay visible, and the title and note are never masked.
 12. **The report was produced from the files you gave it.** If the recorder's host or key was compromised, none of it holds.
+13. **Heartbeats show only that the gap limit was checked.** They do not show that the agent used no tool that was not wrapped.
+14. **A `.md` file read as plain text shows escaping backslashes**; the rendered Markdown and the HTML do not.
+15. **The first screen is not the whole report.** The complete list of limits is in section 10; do not rely on the Result section alone.
+16. **`SECURITY.md` is not shipped with the package.** The report records only the hash of the file its list of limits was generated from, not which commit it came from.
+17. **"Verifier's original wording" is the verifier's text, not a promise by the report.** A phrase such as "all signatures valid" there describes what that check examined, under the limits above.
 
 ## Quickstart
 
@@ -338,7 +343,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 759 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 761 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and
