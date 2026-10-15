@@ -3,5 +3,5 @@
     "require_signatures": true
   },
   "bad_seq": 0,
-  "status": "UNSUPPORTED_ALGORITHM"
+  "status": "BAD_SIGNATURE"
 }

@@ -21,6 +21,7 @@ def run_case(case: Path) -> tuple[dict, dict]:
     keys = load_public_keys([case / "recorder.pub"]) if args.get("require_signatures") else None
     got = verify_all(
         case / "ledger.jsonl", public_keys=keys,
+        anchors_path=case / args["anchors"] if args.get("anchors") else None,
         witness_path=case / args["witness"] if args.get("witness") else None,
         max_gap_s=args.get("max_gap_s"),
     )

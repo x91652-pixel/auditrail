@@ -1,10 +1,8 @@
 {
-  "anchored_upto": 6,
   "args": {
     "require_signatures": true,
     "witness": "witness.jsonl"
   },
   "bad_seq": 0,
-  "status": "UNSUPPORTED_ALGORITHM",
-  "unanchored_tail": 0
+  "status": "BAD_SIGNATURE"
 }

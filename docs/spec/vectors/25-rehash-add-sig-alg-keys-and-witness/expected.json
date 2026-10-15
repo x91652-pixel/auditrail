@@ -3,6 +3,6 @@
     "require_signatures": true,
     "witness": "witness.jsonl"
   },
-  "bad_seq": 3,
+  "bad_seq": 2,
   "status": "BAD_SIGNATURE"
 }

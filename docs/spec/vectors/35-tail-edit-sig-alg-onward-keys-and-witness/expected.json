@@ -3,5 +3,6 @@
     "require_signatures": true,
     "witness": "witness.jsonl"
   },
-  "status": "UNSUPPORTED_ALGORITHM"
+  "bad_seq": 6,
+  "status": "BAD_SIGNATURE"
 }
