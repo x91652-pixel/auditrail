@@ -20,6 +20,7 @@ import hashlib
 import html
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Optional
 
@@ -741,12 +742,33 @@ def _doc(data: dict) -> tuple[list, list]:
 
 
 # --------------------------------------------------------------------------------------------- renderers
-def _md_text(s: str) -> str:
-    return html.escape(str(s), quote=False)
+def _clean(s: Any) -> str:
+    """One line of printable text: every control, format, separator and unassigned character (newlines, U+2028,
+    U+0085, bidi overrides, zero-width marks) becomes a space, and runs of spaces collapse. Free text from the
+    evidence or from the person who generated the report can therefore not start a line of its own."""
+    out = [" " if (unicodedata.category(ch)[0] in "CZ" or ch.isspace()) else ch for ch in str(s)]
+    return re.sub(" {2,}", " ", "".join(out)).strip()
 
 
-def _md_cell(s: str) -> str:
-    return _md_text(s).replace("|", "\\|").replace("\n", " ")
+_MD_SPECIAL = re.compile(r"[\`*\[\]()!#|~]")
+_MD_LEAD = re.compile(r"^(?:[-+=]|\d+[.)])(?=\s|$)")
+
+
+def _md_text(s: Any) -> str:
+    """Markdown-safe text: cleaned to one line, '<>&' as entities, and every Markdown metacharacter backslash-escaped
+    ('_' only where it could open emphasis, i.e. not between two letters or digits)."""
+    t = html.escape(_clean(s), quote=False)
+    t = _MD_SPECIAL.sub(lambda m: "\\" + m.group(0), t)
+    t = re.sub(r"(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])", lambda m: "\\_", t)
+    return _MD_LEAD.sub(lambda m: "\\" + m.group(0), t)
+
+
+def _md_cell(s: Any) -> str:
+    return _md_text(s)
+
+
+def _md_heading(s: Any) -> str:
+    return html.escape(_clean(s), quote=False)
 
 
 def render_md(data: dict) -> str:
@@ -755,11 +777,11 @@ def render_md(data: dict) -> str:
     for blk in B + F:
         t = blk[0]
         if t == "h1":
-            out.append(f"# {_md_text(blk[1])}\n")
+            out.append(f"# {_md_heading(blk[1])}\n")
         elif t == "h2":
-            out.append(f"\n## {_md_text(blk[1])}\n")
+            out.append(f"\n## {_md_heading(blk[1])}\n")
         elif t == "h3":
-            out.append(f"\n### {_md_text(blk[1])}\n")
+            out.append(f"\n### {_md_heading(blk[1])}\n")
         elif t == "p":
             if blk[1]:
                 out.append(f"{_md_text(blk[1])}\n")
@@ -784,7 +806,7 @@ _CSS = ("body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:60rem;ma
 
 def render_html(data: dict) -> str:
     B, F = _doc(data)
-    e = lambda s: html.escape(str(s), quote=True)  # noqa: E731
+    e = lambda s: html.escape(_clean(s), quote=True)  # noqa: E731
     parts = ["<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
              '<meta name="viewport" content="width=device-width,initial-scale=1">',
              "<title>auditrail verification report</title>", f"<style>{_CSS}</style></head><body>"]

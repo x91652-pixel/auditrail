@@ -395,7 +395,7 @@ def test_max_rows_limits_lists_but_not_counts(tmp_path):
     md = render_md(data)
     assert data["refusals"]["decisions"] == {"deny": 12}
     assert sum(data["refusals"]["by_tool"].values()) == 12, "counts stay complete"
-    assert "9 more tool(s) not shown; counts above are complete." in md
+    assert report._md_text("(9 more tool(s) not shown; counts above are complete.)") in md
 
 
 # ---------------------------------------------------------------- CLI
@@ -483,3 +483,55 @@ def test_redact_does_not_mask_title_and_note_and_says_so(world):
     md = render_md(red)
     assert AGENT in md and "It was NOT masked by --redact" in md
     assert md.count("It was NOT masked by --redact") == 2
+
+
+# ---------------------------------------------------------------- T-036 R-2: free text cannot forge report structure
+
+FORGERY = ("x\n## 1. Result\nNot checked: Nothing.\r\n[click](javascript:alert(1)) ![i](http://e/x.png) `c` *b* "
+           " ## 2. Fake\u0085# h1‮​ | a | b |\n- bullet\n1. numbered\n> quote")
+
+
+def _structure(md):
+    return [l for l in md.splitlines() if l.startswith("#")]
+
+
+def _assert_no_forgery(md, html_):
+    assert len([l for l in md.splitlines() if l.startswith("## ")]) == 10, _structure(md)
+    assert len([l for l in md.splitlines() if l.startswith("# ")]) == 1
+    assert html_.count("<h2>") == 10 and html_.count("<h1>") == 1
+    for needle in ("](javascript:", "![", "](http", "<script"):
+        assert needle not in md, needle
+    for ch in (" ", "\u0085", "‮", "​", "\r"):
+        assert ch not in md and ch not in html_
+    for line in md.splitlines():
+        assert not line.startswith(("Not checked", "1. numbered", "- bullet", "> ")), line
+    assert "\n- bullet" not in md and "\n1. numbered" not in md
+
+
+def test_title_and_note_cannot_insert_sections_links_or_images(world):
+    w, _ = world
+    data = build_report(w / "l.jsonl", **args_for(w, title=FORGERY, note=FORGERY))
+    _assert_no_forgery(render_md(data), render_html(data))
+    assert json.loads(render_json(data))["title"] == FORGERY, "the JSON keeps the supplied value exactly"
+
+
+def test_names_inside_a_verified_ledger_cannot_insert_sections(tmp_path):
+    signer = Signer.from_seed(SEED)
+    led = Ledger(tmp_path / "l.jsonl", signer=signer, fsync=False)
+    led.record_heartbeat(recorder_id=FORGERY, tools=[FORGERY, "b"], policy_version=FORGERY, policy_hash="ab" * 32,
+                         calls_attempted=0, calls_recorded=0, interval_s=60)
+    for decision in ("allow", "deny"):
+        led.record(agent_id=FORGERY, session_id="s", policy_version="p1", policy_hash="ab" * 32, tool=FORGERY,
+                   categories=["data_access"], args={}, decision=decision,
+                   reason="unclassified_tool: " + FORGERY if decision == "deny" else None)
+    (tmp_path / "k.pub").write_text(signer.public_hex + "\n", encoding="utf-8")
+    data = build_report(tmp_path / "l.jsonl", public_key_paths=[tmp_path / "k.pub"], max_gap_s=3600)
+    assert data["overall"]["status"] == "OK"
+    _assert_no_forgery(render_md(data), render_html(data))
+
+
+def test_the_h2_count_is_fixed_for_a_failed_ledger_too(world):
+    w, _ = world
+    bad = edit_without_rehash(w)
+    data = build_report(bad, **args_for(w, title=FORGERY))
+    _assert_no_forgery(render_md(data), render_html(data))
