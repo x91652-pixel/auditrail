@@ -124,16 +124,43 @@ def test_a_non_default_signer_writes_the_member_and_the_ledger_hashes_it(tmp_pat
 
 # ---------------------------------------------------------------- unsupported algorithm: never a quiet OK
 
-def test_unsupported_algorithm_with_keys_is_not_ok_in_either_language(tmp_path):
+
+def test_a_record_naming_another_algorithm_under_an_ed25519_key_is_a_mismatch_in_both_languages(tmp_path):
+    """D-14: every key read from a .pub file is an Ed25519 key, so a record claiming another algorithm is not a
+    signature that key made -- BAD_SIGNATURE ("algorithm mismatch"), whether or not the algorithm is implemented.
+    (This used to be UNSUPPORTED_ALGORITHM; that let anyone turn a forgery into 'could not judge'.)"""
     s = FutureSigner.from_seed(SEED)
     make_ledger(tmp_path / "l.jsonl", s)
     pub = pub_file(tmp_path, s)
     res = verify_all(tmp_path / "l.jsonl", public_keys={s.key_id: s.public_hex})
+    assert res["status"] == "BAD_SIGNATURE" and res["bad_seq"] == 0
+    assert "algorithm mismatch" in res["detail"]
+    r = rust(tmp_path / "l.jsonl", pub)
+    assert r["status"] == "BAD_SIGNATURE" and r["bad_seq"] == 0 and "algorithm mismatch" in r["detail"]
+
+
+def registered_as_future(s):
+    """Trusted keys as the Python API can express them: the key is registered as an 'x-future-alg' key."""
+    return TrustedKeys({s.key_id: s.public_hex}, {s.key_id: "x-future-alg"})
+
+
+def test_unsupported_algorithm_is_reached_only_when_the_key_is_registered_as_that_type(tmp_path):
+    s = FutureSigner.from_seed(SEED)
+    make_ledger(tmp_path / "l.jsonl", s)
+    res = verify_all(tmp_path / "l.jsonl", public_keys=registered_as_future(s))
     assert res["status"] == "UNSUPPORTED_ALGORITHM" and res["bad_seq"] == 0
     assert "Inconclusive, not OK" in res["detail"] and "not evidence of tampering" not in res["detail"]
     assert "does not mean the records were not tampered with" in res["detail"]
-    r = rust(tmp_path / "l.jsonl", pub)
-    assert r["status"] == "UNSUPPORTED_ALGORITHM" and r["bad_seq"] == 0
+
+
+def test_a_definite_finding_outranks_unsupported_even_when_the_key_is_registered_as_that_type(tmp_path):
+    s = FutureSigner.from_seed(SEED)
+    make_ledger(tmp_path / "l.jsonl", s, n=5)
+    recs = [json.loads(x) for x in (tmp_path / "l.jsonl").read_text(encoding="utf-8").splitlines()]
+    recs[3]["decision"] = "deny"  # not re-hashed
+    (tmp_path / "e.jsonl").write_text("".join(_canonical(x) + "\n" for x in recs), encoding="utf-8", newline="\n")
+    res = verify_all(tmp_path / "e.jsonl", public_keys=registered_as_future(s))
+    assert res["status"] == "TAMPERED_LEDGER" and res["bad_seq"] == 3
 
 
 def test_unsupported_algorithm_without_keys_is_ok_with_a_note_in_both_languages(tmp_path):
@@ -146,16 +173,17 @@ def test_unsupported_algorithm_without_keys_is_ok_with_a_note_in_both_languages(
     assert r["status"] == "OK" and r["unchecked_algorithms"] == ["x-future-alg"]
 
 
+
 def test_only_one_verifier_supports_the_algorithm(tmp_path, monkeypatch):
-    """Python is given an implementation of 'x-future-alg'; the Rust verifier is not. Python verifies, Rust says
-    UNSUPPORTED_ALGORITHM and never OK."""
+    """Python is given an implementation of 'x-future-alg' and a key registered as that type; the Rust verifier can
+    only be given Ed25519 keys, so for the same bytes it says BAD_SIGNATURE (mismatch) and never OK."""
     s = FutureSigner.from_seed(SEED)
     make_ledger(tmp_path / "l.jsonl", s)
     pub = pub_file(tmp_path, s)
     monkeypatch.setitem(keys_mod._VERIFIERS, "x-future-alg", keys_mod.verify_sig)
-    trusted = TrustedKeys({s.key_id: s.public_hex}, {s.key_id: "x-future-alg"})
-    assert verify_all(tmp_path / "l.jsonl", public_keys=trusted)["status"] == "OK"
-    assert rust(tmp_path / "l.jsonl", pub)["status"] == "UNSUPPORTED_ALGORITHM"
+    assert verify_all(tmp_path / "l.jsonl", public_keys=registered_as_future(s))["status"] == "OK"
+    r = rust(tmp_path / "l.jsonl", pub)
+    assert r["status"] == "BAD_SIGNATURE" and r["status"] != "OK"
 
 
 def test_a_bad_signature_under_a_supported_extra_algorithm_is_still_caught(tmp_path, monkeypatch):
@@ -198,18 +226,21 @@ def test_a_value_outside_the_grammar_is_malformed_in_both_languages(tmp_path, de
         assert rust(tmp_path / "l.jsonl", p)["status"] == "MALFORMED_RECORD", (value, p)
 
 
+
 @pytest.mark.parametrize("value", GOOD_TOKENS)
-def test_a_well_formed_unknown_token_is_unsupported_not_malformed(tmp_path, default_signer, value):
+def test_a_well_formed_unknown_token_is_a_mismatch_not_malformed(tmp_path, default_signer, value):
+    """A token inside the grammar is not MALFORMED. Under an Ed25519 key it names an algorithm that key is not
+    (BAD_SIGNATURE, D-14); with no keys nothing is checked and the answer is OK."""
     make_ledger(tmp_path / "l.jsonl", default_signer)
-    # the LAST record: with a later record the re-hash would leave its old signature stale, which is (rightly) a
-    # BAD_SIGNATURE found before the inconclusive status is reported
+    # the LAST record, so that only the claimed algorithm (not a stale later signature) can explain the status
     rewrite(tmp_path / "l.jsonl", lambda r: r[-1].update(sig_alg=value))
     pub = pub_file(tmp_path, default_signer)
     keys = {default_signer.key_id: default_signer.public_hex}
     res = verify_all(tmp_path / "l.jsonl", public_keys=keys)
-    assert res["status"] == "UNSUPPORTED_ALGORITHM" and res["bad_seq"] == 3
+    assert res["status"] == "BAD_SIGNATURE" and res["bad_seq"] == 3 and "algorithm mismatch" in res["detail"]
     assert verify_all(tmp_path / "l.jsonl")["status"] == "OK"
-    assert rust(tmp_path / "l.jsonl", pub)["status"] == "UNSUPPORTED_ALGORITHM"
+    r = rust(tmp_path / "l.jsonl", pub)
+    assert r["status"] == "BAD_SIGNATURE" and r["bad_seq"] == 3
     assert rust(tmp_path / "l.jsonl")["status"] == "OK"
 
 
@@ -253,6 +284,7 @@ def anchor_lines(tmp_path, signer, ledger_signer):
     return [json.loads(x) for x in (tmp_path / "w.jsonl").read_text(encoding="utf-8").splitlines()]
 
 
+
 def test_a_non_default_signer_makes_an_anchor_version_3_with_sig_alg_in_the_body(tmp_path, default_signer):
     s = FutureSigner.from_seed(SEED)
     (line,) = anchor_lines(tmp_path, s, default_signer)
@@ -260,8 +292,8 @@ def test_a_non_default_signer_makes_an_anchor_version_3_with_sig_alg_in_the_body
     pub = pub_file(tmp_path, default_signer)
     keys = {default_signer.key_id: default_signer.public_hex}
     res = verify_all(tmp_path / "l.jsonl", public_keys=keys, witness_path=tmp_path / "w.jsonl")
-    assert res["status"] == "UNSUPPORTED_ALGORITHM"
-    assert rust(tmp_path / "l.jsonl", pub, tmp_path / "w.jsonl")["status"] == "UNSUPPORTED_ALGORITHM"
+    assert res["status"] == "BAD_SIGNATURE" and "algorithm mismatch" in res["detail"]  # an Ed25519 key, another algorithm
+    assert rust(tmp_path / "l.jsonl", pub, tmp_path / "w.jsonl")["status"] == "BAD_SIGNATURE"
     # no keys: the anchor's hash and its match with the ledger are still checked
     assert verify_all(tmp_path / "l.jsonl", witness_path=tmp_path / "w.jsonl")["status"] == "OK"
     assert rust(tmp_path / "l.jsonl", None, tmp_path / "w.jsonl")["status"] == "OK"
@@ -331,9 +363,10 @@ def test_property_python_and_rust_agree_on_any_sig_alg_value(tmp_path_factory, v
     rs = rust(tmp / "l.jsonl", pub)
     assert py["status"] == rs["status"], (value, with_keys, py, rs)
     assert py.get("bad_seq") == rs.get("bad_seq")
-    # and never a quiet OK for an algorithm that was not checked while keys were required
+    # and never a quiet OK for an algorithm that was not checked while keys were required; under an Ed25519 key
+    # (the only kind a file can give) it is not even inconclusive: the claimed algorithm is a mismatch (D-14)
     if with_keys:
-        assert py["status"] != "OK"
+        assert py["status"] not in ("OK", "UNSUPPORTED_ALGORITHM", "UNSUPPORTED_FORMAT")
 
 
 # ---------------------------------------------------------------- R-1: inconclusive never outranks definite evidence
@@ -367,6 +400,7 @@ def test_r1_an_edit_with_an_inconclusive_marker_is_still_reported_as_evidence(tm
     rs = rust(tmp_path / "l.jsonl", pub, witness)
     assert py["status"] == rs["status"], (py, rs)
     assert py.get("bad_seq") == rs.get("bad_seq")
+    assert py["status"] not in INCONCLUSIVE_STATUSES, (where, extra, inputs, py)  # D-14: never, with a file key
     if witness is not None:
         # a witness copy of the real head is present: the rewrite must be found, never "could not judge"
         assert py["status"] in DEFINITE, (where, extra, inputs, py)
@@ -374,42 +408,40 @@ def test_r1_an_edit_with_an_inconclusive_marker_is_still_reported_as_evidence(tm
         assert py["status"] in DEFINITE  # the following records' signatures no longer match their new hashes
 
 
-def test_r1_with_keys_only_and_nothing_after_the_edit_the_status_is_inconclusive_and_says_it_can_be_provoked(
-        tmp_path, default_signer):
-    """The one case a key alone cannot settle: the LAST record edited and given a sig_alg. The answer is a failure
-    (not OK) whose wording does not claim the records were untouched."""
+
+def test_r1_with_keys_only_and_nothing_after_the_edit_the_status_is_a_mismatch(tmp_path, default_signer):
+    """The case a key alone used to leave inconclusive: the LAST record edited and given a sig_alg. D-14 makes it
+    definite: an Ed25519 key cannot have signed under another algorithm."""
     witnessed_ledger(tmp_path, default_signer)
     rewrite(tmp_path / "l.jsonl", lambda r: r[-1].update(decision="allow", reason=None, sig_alg="x-future-alg"))
     keys = {default_signer.key_id: default_signer.public_hex}
     res = verify_all(tmp_path / "l.jsonl", public_keys=keys)
-    assert res["status"] == "UNSUPPORTED_ALGORITHM" and res["bad_seq"] == 5
-    assert "provoked by someone without the key" in res["detail"]
-    assert "not evidence of tampering" not in res["detail"]
+    assert res["status"] == "BAD_SIGNATURE" and res["bad_seq"] == 5 and "algorithm mismatch" in res["detail"]
     r = rust(tmp_path / "l.jsonl", pub_file(tmp_path, default_signer))
-    assert r["status"] == "UNSUPPORTED_ALGORITHM" and "provoked by someone without the key" in r["detail"]
+    assert r["status"] == "BAD_SIGNATURE" and r["bad_seq"] == 5
+
 
 
 def test_r1_a_definite_status_found_later_outranks_an_earlier_inconclusive_one(tmp_path):
+    """Kept from R-1; with D-14 the inconclusive status is reachable only for a key registered as that type, so
+    this runs on the Python API (the Rust verifier cannot be given such a key)."""
     s = FutureSigner.from_seed(SEED)
     make_ledger(tmp_path / "l.jsonl", s, n=5)  # every record names x-future-alg: inconclusive from seq 0
     recs = [json.loads(x) for x in (tmp_path / "l.jsonl").read_text(encoding="utf-8").splitlines()]
     recs[3]["decision"] = "deny"  # hash not recomputed
     (tmp_path / "e.jsonl").write_text("".join(_canonical(x) + "\n" for x in recs), encoding="utf-8", newline="\n")
-    keys = {s.key_id: s.public_hex}
-    res = verify_all(tmp_path / "e.jsonl", public_keys=keys)
+    res = verify_all(tmp_path / "e.jsonl", public_keys=registered_as_future(s))
     assert res["status"] == "TAMPERED_LEDGER" and res["bad_seq"] == 3
-    assert rust(tmp_path / "e.jsonl", pub_file(tmp_path, s))["status"] == "TAMPERED_LEDGER"
+
 
 
 def test_r1_coverage_is_reported_with_the_inconclusive_result(tmp_path):
     s = FutureSigner.from_seed(SEED)
-    (line,) = anchor_lines(tmp_path, s, s)
-    res = verify_all(tmp_path / "l.jsonl", public_keys={s.key_id: s.public_hex}, witness_path=tmp_path / "w.jsonl")
+    anchor_lines(tmp_path, s, s)
+    res = verify_all(tmp_path / "l.jsonl", public_keys=registered_as_future(s), witness_path=tmp_path / "w.jsonl")
     assert res["status"] == "UNSUPPORTED_ALGORITHM"
     assert res["anchored_upto"] == 3 and res["unanchored_tail"] == 0
     assert res["unchecked_algorithms"] == ["x-future-alg"]
-    r = rust(tmp_path / "l.jsonl", pub_file(tmp_path, s), tmp_path / "w.jsonl")
-    assert r["status"] == "UNSUPPORTED_ALGORITHM" and r["anchored_upto"] == 3 and r["unanchored_tail"] == 0
 
 
 @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -456,3 +488,29 @@ def test_r3_the_cli_prints_the_algorithm_name_when_it_could_not_check_it(tmp_pat
     anchor_lines(tmp_path, s, default_signer)
     assert main(["verify", str(tmp_path / "l.jsonl"), "--witness-file", str(tmp_path / "w.jsonl")]) == 0
     assert "x-future-alg" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- D-14: the mismatch rule, as a property
+
+@settings(max_examples=60, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(value=token_text, index=st.integers(0, 3), with_witness=st.booleans())
+def test_property_under_an_ed25519_key_any_non_default_sig_alg_is_never_ok_and_never_inconclusive(
+        tmp_path_factory, value, index, with_witness):
+    tmp = tmp_path_factory.mktemp("d14")
+    s = Signer.from_seed(SEED)
+    witnessed_ledger(tmp, s, n=4)
+    rewrite(tmp / "l.jsonl", lambda r: r[index].update(sig_alg=value))
+    keys = {s.key_id: s.public_hex}
+    witness = tmp / "w.jsonl" if with_witness else None
+    py = verify_all(tmp / "l.jsonl", public_keys=keys, witness_path=witness)
+    rs = rust(tmp / "l.jsonl", pub_file(tmp, s), witness)
+    assert py["status"] == rs["status"], (value, py, rs)
+    assert py["status"] not in ("OK", "UNSUPPORTED_ALGORITHM", "UNSUPPORTED_FORMAT"), (value, py)
+
+
+def test_the_verifier_reports_the_registered_type_it_found_for_a_key(tmp_path):
+    s = FutureSigner.from_seed(SEED)
+    make_ledger(tmp_path / "l.jsonl", s)
+    # ledger written under 'x-future-alg' but the trusted key is registered as ed25519: a mismatch both ways round
+    trusted = TrustedKeys({s.key_id: s.public_hex}, {s.key_id: "ed25519"})
+    assert verify_all(tmp_path / "l.jsonl", public_keys=trusted)["status"] == "BAD_SIGNATURE"
