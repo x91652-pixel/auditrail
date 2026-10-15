@@ -228,7 +228,7 @@ Markdown syntax in them cannot add a section or a link) and labelled as supplied
 says what ran and what did not from the outcomes, not from the flags (an empty witness file, an empty ledger or a
 ledger reconciled against itself is named as such). Failures to write are a one-line error with exit 2; an existing
 `--out` file is refused unless `--force`, and an input file is never overwritten. `stdout` is written as UTF-8 with
-LF line ends, the same bytes as `--out`.
+LF line ends, the same bytes as `--out`. Exit code 0 means no finding; 1 means a finding **or an inconclusive result**, which is not necessarily tampering; 2 means the report could not be produced. A `--redact-salt` is passed on the command line, so it is visible in the process list and shell history.
 
 To see the whole path in one go (an agent, a signature, a witness copy, one record altered, the verifier catching it,
 two reports), on Windows or Linux:
@@ -321,7 +321,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 733 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 751 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and

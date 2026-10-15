@@ -39,7 +39,7 @@ CI（GitHub Actions）在 PR #1 / #2 / #3 合併前全部成功；`verifier` job
 
 | 指令 | 結果 |
 |---|---|
-| `pytest -q -rs` | **730 通過、0 失敗、3 跳過**（`test_phase1_defaults.py:357` 與 `test_t010b_recorder.py:107`，各只在 POSIX 執行；`test_report_r4.py:58` 需要 POSIX 的唯讀目錄語意；另有只在 Windows 執行的 ACL 測試，在 POSIX 上會跳過）；共收集 733 個 |
+| `pytest -q -rs` | **748 通過、0 失敗、3 跳過**（`test_phase1_defaults.py:357` 與 `test_t010b_recorder.py:107`，各只在 POSIX 執行；`test_report_r4.py:58` 需要 POSIX 的唯讀目錄語意；另有只在 Windows 執行的 ACL 測試，在 POSIX 上會跳過）；共收集 751 個 |
 | `cd verifier && cargo test --locked --release` | robust 2 通過、vectors 2 通過 |
 
 沒有 Rust 執行檔時，`test_policy_hash.py` 的 9 個 Rust 對照測試會**明確 skip**（`pytest.skip`），不再算通過。Linux 與 Python 3.10 從未在本機執行。
@@ -194,7 +194,7 @@ README「Anchoring」寫的是 7 種結果。實際 Python `verify`（含錨點�
 | R8 | `--redact` 只替換名稱欄位的值，不碰狀態字串與結構鍵（工具名為 `LEDGER`／`TAMPERED`／`OK`、agent 為 `status` 等皆不改變狀態、不報錯）；代號不是祕密，報告明寫並列出未遮蔽欄位；`--redact-salt` 可選；標題／備註不遮蔽並標示 | `report.py` `_redact`、`_code` | `test_report.py::test_redact_never_rewrites_the_status_or_the_structure`（11 個名稱）、`::test_redact_replaces_whole_words_in_the_verifiers_free_text`、`::test_redact_codes_are_labelled_not_secret_and_salt_changes_them`、`::test_redact_does_not_mask_title_and_note_and_says_so` | 🟡 | 只遮蔽「出現在記錄中的名稱」；policy_version 內嵌名稱、session／trace id、title／note 不處理；無鹽的代號可被字典還原 |
 | R9 | 自由文字（title、note、名稱、detail、路徑）折成單行並跳脫 Markdown 語法；不能多出章節、連結或圖片；h2 數固定 10（md／html） | `report.py` `_clean`、`_md_text` | `test_report.py::test_title_and_note_cannot_insert_sections_links_or_images`、`::test_names_inside_a_verified_ledger_cannot_insert_sections`、`::test_the_h2_count_is_fixed_for_a_failed_ledger_too` | ✅ | JSON 保留原值（是 JSON 字串）；Markdown 內固定文字的括號也被跳脫（原文較難讀） |
 | R10 | 「Checks that ran／Not checked」由實際結果決定：空錨點／見證檔、空帳本、自我對帳、無法比對的訊息、無金鑰時的表格列名；Not checked 無項目時不放安心句 | `report.py` `build_report`、`_doc` | `test_report_r3.py`（L-1 至 L-4 與其餘）| ✅ | 「Checks that ran」是從結果推導，不是驗證器內部的執行紀錄 |
-| R11 | 寫出失敗一律單行錯誤、不寫部分報告、exit 2；`--max-gap`／`--max-rows` 須為正整數；既有 `--out` 需 `--force`，輸入檔永不覆蓋；stdout 以 UTF-8 位元組寫出，與 `--out` 相同 | `cli.py` `cmd_report` | `test_report_r4.py`（17 項）| ✅ | 唯讀目錄的案例在 Windows 略過（POSIX 才有意義） |
+| R11 | 寫出失敗一律單行錯誤、不寫部分報告、exit 2；`--max-gap`／`--max-rows` 須為正整數；既有 `--out` 需 `--force`，輸入檔永不覆蓋；stdout 以 UTF-8 位元組寫出，與 `--out` 相同 | `cli.py` `cmd_report` | `test_report_r4.py`（含 C-1：硬連結、符號連結、junction、大小寫、8.3 短名、`\?\` 前綴、--format all）| ✅ | 唯讀目錄的案例在 Windows 略過；守衛為 samefile＋realpath 比對，未涵蓋其他檔案系統的別名機制 |
 
 
 ### 3.6 SECURITY.md「does NOT do」清單
