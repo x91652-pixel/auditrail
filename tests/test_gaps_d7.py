@@ -223,9 +223,12 @@ def _spawn_recorder(tmp_path, *extra):
     out: list = []
 
     def pump():
-        for line in proc.stdout:
-            out.append(line)
-            lines.put(line)
+        try:
+            for line in proc.stdout:
+                out.append(line)
+                lines.put(line)
+        finally:
+            proc.stdout.close()  # the reader owns the pipe; closing it here leaves no unclosed file behind
 
     threading.Thread(target=pump, daemon=True).start()
     port = None

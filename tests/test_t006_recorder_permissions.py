@@ -181,6 +181,7 @@ def test_d4_a_missing_file_is_reported_but_does_not_block_start(tmp_path, capsys
 
     def fake_start(self):
         started.set()
+        self._server.server_close()  # the constructor bound a port; do not leave it to the collector
         raise KeyboardInterrupt  # end serve() right after "start"
 
     monkeypatch.setattr(recorder.RecorderService, "start", fake_start)
