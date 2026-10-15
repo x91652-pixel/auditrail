@@ -209,6 +209,7 @@ def test_recorder_holds_the_key_and_agent_side_can_only_append(tmp_path):
             list(remote)  # agents cannot read the ledger back
         assert not hasattr(remote, "signer") or remote.signer is None
     finally:
+        remote.close()
         svc.stop()
     r = verify_all(tmp_path / "l.jsonl", public_keys={rec_key.key_id: rec_key.public_hex})
     assert r["status"] == "OK"
@@ -219,8 +220,10 @@ def test_recorder_rejects_requests_without_the_token_and_non_append_ops(tmp_path
     svc = RecorderService(Ledger(tmp_path / "l.jsonl", signer=Signer.generate()), token="s3cret", heartbeat_s=0).start()
     try:
         port = svc.address[1]
+        wrong = RemoteLedger(port=port, token="wrong")
         with pytest.raises(RecorderUnavailable, match="token"):
-            RemoteLedger(port=port, token="wrong").record_event("heartbeat")
+            wrong.record_event("heartbeat")
+        wrong.close()
         assert svc.handle_request({"op": "delete", "token": "s3cret"})["ok"] is False
         assert svc.handle_request({"op": "call", "fields": {"tool": "x"}, "token": "s3cret"}) .get("ok") is not True
     finally:
@@ -229,10 +232,12 @@ def test_recorder_rejects_requests_without_the_token_and_non_append_ops(tmp_path
 
 def test_guarded_call_fails_loudly_when_the_recorder_is_down():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
-    guard = Guard(PolicyEngine(POLICY), RemoteLedger(port=port, timeout=0.5))
+    remote = RemoteLedger(port=port, timeout=0.5)
+    guard = Guard(PolicyEngine(POLICY), remote)
     tool = guard.guarded_tool("read_private", categories=["data_access"])(lambda: 1)
     with pytest.raises(RecorderUnavailable):
         tool(guard.session("A"))
+    remote.close()
 
 
 def test_recorder_refuses_non_loopback_addresses(tmp_path):

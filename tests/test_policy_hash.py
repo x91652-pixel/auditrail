@@ -77,8 +77,10 @@ def test_recorder_path_keeps_the_hash(tmp_path):
     key = Signer.generate()
     svc = RecorderService(Ledger(tmp_path / "r.jsonl", signer=key), heartbeat_s=0).start()
     try:
-        g = Guard(PolicyEngine(POLICY), RemoteLedger(port=svc.address[1]))
+        remote = RemoteLedger(port=svc.address[1])
+        g = Guard(PolicyEngine(POLICY), remote)
         g.guarded_tool("read", categories=["data_access"])(lambda: 1)(g.session("a"))
+        remote.close()
     finally:
         svc.stop()
     call = next(r for r in Ledger(tmp_path / "r.jsonl") if r["kind"] == "call")
