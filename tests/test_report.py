@@ -318,14 +318,14 @@ def test_the_html_is_self_contained(world):
 def test_redact_removes_every_original_name_and_keeps_the_counts(world):
     w, _ = world
     plain = build_report(w / "l.jsonl", **args_for(w))
-    red = build_report(w / "l.jsonl", **args_for(w, redact=True, title="about " + AGENT))
+    red = build_report(w / "l.jsonl", **args_for(w, redact=True))
     for text in (render_md(red), render_html(red), render_json(red)):
         for secret in (AGENT, TRICKY_TOOL, RECORDER, "SECRET", "l.jsonl", "w.jsonl", "k.pub"):
             assert secret not in text, secret
         assert "agent-" in text and "tool-" in text and "recorder-" in text
     assert red["refusals"]["decisions"] == plain["refusals"]["decisions"]
     assert red["scope"]["records"] == plain["scope"]["records"]
-    again = build_report(w / "l.jsonl", **args_for(w, redact=True, title="about " + AGENT))
+    again = build_report(w / "l.jsonl", **args_for(w, redact=True))
     assert render_md(again) == render_md(red)
     assert red["fingerprint_sha256"] != plain["fingerprint_sha256"]
 
@@ -423,3 +423,63 @@ def test_legacy_ledger_report_is_inconclusive_and_says_how_to_check_it(capsys):
     out = capsys.readouterr().out
     assert code == 1 and "LEGACY_FORMAT" in out and "legacy-v01" in out
     assert "found no inconsistency in the records they covered" not in out.split("### Checks that ran")[0]
+
+
+# ---------------------------------------------------------------- T-036 R-1: redaction touches name fields only
+
+COLLIDING_TOOLS = ["LEDGER", "TAMPERED", "BAD", "SIGNATURE", "OK", "records", "kinds", "detail", "e", "status", "scope"]
+
+
+@pytest.mark.parametrize("tool", COLLIDING_TOOLS)
+def test_redact_never_rewrites_the_status_or_the_structure(tmp_path, tool):
+    signer = Signer.from_seed(SEED)
+    write_ledger(tmp_path / "l.jsonl", signer, tool=tool, agent="a2" if tool == "e" else "status")
+    (tmp_path / "k.pub").write_text(signer.public_hex + "\n", encoding="utf-8")
+    bad = edit_without_rehash(tmp_path)
+    for target in (tmp_path / "l.jsonl", bad):
+        plain = build_report(target, public_key_paths=[tmp_path / "k.pub"], max_gap_s=3600)
+        red = build_report(target, public_key_paths=[tmp_path / "k.pub"], max_gap_s=3600, redact=True)
+        assert red["overall"]["status"] == plain["overall"]["status"]
+        assert json.loads(render_json(red))["overall"]["status"] == plain["overall"]["status"]
+        assert render_md(red).count(f"Verifier status: {plain['overall']['status']}.") == 1
+        for key in ("scope", "refusals", "heartbeats", "a2a", "chain"):
+            assert (red[key] is None) == (plain[key] is None)
+        if plain["scope"]:
+            assert red["scope"]["kinds"] == plain["scope"]["kinds"]
+        if plain["refusals"]["evaluated"]:
+            assert tool not in red["refusals"]["by_tool"] and tool not in red["heartbeats"]["tool_lists"]
+            assert sum(red["refusals"]["by_tool"].values()) == sum(plain["refusals"]["by_tool"].values())
+
+
+def test_redact_replaces_whole_words_in_the_verifiers_free_text(tmp_path):
+    signer = Signer.from_seed(SEED)
+    write_ledger(tmp_path / "l.jsonl", signer, tool="read_x", agent="agent-q")
+    bad = edit_without_rehash(tmp_path)
+    red = build_report(bad, public_key_paths=[], redact=True)
+    assert red["overall"]["status"] == "TAMPERED_LEDGER"
+    assert "t.jsonl" not in json.dumps(red)
+
+
+def test_redact_codes_are_labelled_not_secret_and_salt_changes_them(world):
+    w, _ = world
+    plain = build_report(w / "l.jsonl", **args_for(w, redact=True))
+    salted = build_report(w / "l.jsonl", **args_for(w, redact=True, redact_salt="hunter2-secret"))
+    assert plain["refusals"]["by_agent"] and salted["refusals"]["by_agent"]
+    assert set(plain["refusals"]["by_agent"]) != set(salted["refusals"]["by_agent"])
+    for text in (render_md(salted), render_html(salted), render_json(salted)):
+        assert "hunter2-secret" not in text
+    md_plain, md_salted = render_md(plain), render_md(salted)
+    assert "no salt was supplied" in md_plain and "not secrets" in md_plain
+    assert "mixed with a salt" in md_salted and "no salt was supplied" not in md_salted
+    for must in ("policy version strings", "timestamps", "counts", "input file SHA-256"):
+        assert must in md_plain
+    unredacted = render_md(build_report(w / "l.jsonl", **args_for(w)))
+    assert "not secrets" not in unredacted
+
+
+def test_redact_does_not_mask_title_and_note_and_says_so(world):
+    w, _ = world
+    red = build_report(w / "l.jsonl", **args_for(w, redact=True, title="about " + AGENT, note="n " + RECORDER))
+    md = render_md(red)
+    assert AGENT in md and "It was NOT masked by --redact" in md
+    assert md.count("It was NOT masked by --redact") == 2

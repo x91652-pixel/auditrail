@@ -179,6 +179,9 @@ def cmd_report(args: argparse.Namespace) -> int:
     if not ledger.is_file():
         print(f"[ERROR] {args.ledger_path}: file not found (no report was produced)", file=sys.stderr)
         return 2
+    if args.redact_salt is not None and not args.redact:
+        print("[ERROR] --redact-salt only has an effect together with --redact (no report was produced)", file=sys.stderr)
+        return 2
     stamp = None
     if args.generated_at:
         if args.generated_at == "now":
@@ -198,7 +201,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         data = build_report(
             ledger, public_key_paths=args.pubkey or (), anchors_path=args.anchors, witness_path=args.witness_file,
             git_repo=args.git_repo, max_gap_s=args.max_gap, peer_ledgers=args.peer_ledger or (),
-            agents=args.agent or (), title=args.title, note=args.note, redact=args.redact, generated_at=stamp,
+            agents=args.agent or (), title=args.title, note=args.note, redact=args.redact, redact_salt=args.redact_salt,
+            generated_at=stamp,
             max_rows=args.max_rows if args.max_rows is not None else DEFAULT_MAX_ROWS)
     except (ValueError, OSError) as exc:
         print(f"[ERROR] {exc} (no report was produced)", file=sys.stderr)
@@ -292,7 +296,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--title", help="Printed at the top, labelled as supplied and not examined.")
     p_rep.add_argument("--note", help="Printed at the top, labelled as supplied and not examined.")
     p_rep.add_argument("--generated-at", help="'now' or YYYY-MM-DDTHH:MM:SSZ. Without it the report has no timestamp.")
-    p_rep.add_argument("--redact", action="store_true", help="Replace agent, tool and recorder names by stable digests.")
+    p_rep.add_argument("--redact", action="store_true", help="Replace agent, tool and recorder names by codes "
+                       "(not secret: a guessable name can be recovered; see --redact-salt).")
+    p_rep.add_argument("--redact-salt", help="With --redact: a secret mixed into the codes, so guessing a name needs "
+                       "the salt. The salt is never printed. Without it the codes are unsalted and the report says so.")
     p_rep.add_argument("--max-rows", type=int, help="Rows shown in long lists (counts are always complete).")
     p_rep.set_defaults(func=cmd_report)
 

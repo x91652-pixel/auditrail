@@ -223,6 +223,7 @@ def build_report(
     title: Optional[str] = None,
     note: Optional[str] = None,
     redact: bool = False,
+    redact_salt: Optional[str] = None,
     generated_at: Optional[str] = None,
     max_rows: int = DEFAULT_MAX_ROWS,
 ) -> dict:
@@ -409,30 +410,16 @@ def build_report(
             nc.append(f"The {name} were not evaluated because the records failed an earlier check.")
     data["not_checked"] = nc
 
-    # --- redaction (applied to the whole structure below)
+    # --- redaction: only the values of known name fields are replaced; statuses and structure keys are never touched
+    data["redacted"] = redact
+    data["redaction"] = {"salted": bool(redact_salt)} if redact else None
     if redact:
-        names = {"agent": set(), "tool": set(), "recorder": set()}
-        for r in records:
-            if isinstance(r.get("agent_id"), str):
-                names["agent"].add(r["agent_id"])
-            if isinstance(r.get("peer"), str):
-                names["agent"].add(r["peer"])
-            if isinstance(r.get("tool"), str):
-                names["tool"].add(r["tool"])
-            if isinstance(r.get("recorder_id"), str):
-                names["recorder"].add(r["recorder_id"])
-            for t in r.get("tools", []) if isinstance(r.get("tools"), list) else []:
-                if isinstance(t, str):
-                    names["tool"].add(t)
-        for a in agents:
-            names["agent"].add(a)
-        mapping = {}
-        for kind, group in names.items():
-            for n in group:
-                mapping[n] = f"{kind}-" + hashlib.sha256(f"{kind}:{n}".encode("utf-8")).hexdigest()[:8]
-        data = _apply_mapping(data, mapping)
-        for i in data["inputs"]:
-            i["name"] = f"({i['role']}: name withheld)"
+        status_before = data["overall"]["status"]
+        data = _redact(data, records, agents, redact_salt, [ledger, *[Path(p) for p in public_key_paths],
+                                                           *[Path(p) for p in (anchors_path, witness_path) if p],
+                                                           *[Path(p) for p in peer_ledgers]])
+        if data["overall"]["status"] != status_before:
+            raise ValueError("redaction changed the verifier status; no report is produced")
 
     # --- fingerprint (everything above; the optional stamp is added afterwards and is not part of it)
     body = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -441,27 +428,80 @@ def build_report(
     return data
 
 
-def _apply_mapping(obj: Any, mapping: dict[str, str]) -> Any:
-    if not mapping:
-        return obj
-    ordered = sorted(mapping, key=len, reverse=True)
+REDACTION_NOT_MASKED = ("policy version strings, timestamps, counts, key ids, policy hashes, message ids, input file "
+                        "SHA-256 values and sizes, and any name that does not appear in the records")
 
-    def sub(text: str) -> str:
-        for n in ordered:
-            if n and n in text:
-                text = text.replace(n, mapping[n])
-        return text
 
-    def walk(x):
-        if isinstance(x, str):
-            return sub(x)
-        if isinstance(x, list):
-            return [walk(i) for i in x]
-        if isinstance(x, dict):
-            return {sub(k) if isinstance(k, str) else k: walk(v) for k, v in x.items()}
-        return x
+def _code(kind: str, name: str, salt: Optional[str]) -> str:
+    seed = f"{kind}:{name}" if not salt else f"{salt}:salt:{kind}:{name}"
+    return f"{kind}-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8]
 
-    return walk(obj)
+
+def _redact(data: dict, records: list, agents, salt: Optional[str], input_paths: list) -> dict:
+    """Replace names in the fields that carry them, by whole value or whole word. Structure keys and statuses are
+    left alone; --title and --note are not touched (and the report says so)."""
+    names: dict[str, set] = {"agent": set(), "tool": set(), "recorder": set()}
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        for key, kind in (("agent_id", "agent"), ("peer", "agent"), ("tool", "tool"), ("recorder_id", "recorder")):
+            if isinstance(r.get(key), str):
+                names[kind].add(r[key])
+        for t in r.get("tools", []) if isinstance(r.get("tools"), list) else []:
+            if isinstance(t, str):
+                names["tool"].add(t)
+    names["agent"].update(a for a in agents if isinstance(a, str))
+    maps = {k: {n: _code(k, n, salt) for n in v if n} for k, v in names.items()}
+    flat: dict[str, str] = {}
+    for k in ("recorder", "tool", "agent"):  # earlier kinds lose on a clash; agents win
+        flat.update(maps[k])
+    withheld = {}
+    for p in input_paths:
+        for t in {str(p), p.name}:
+            if t:
+                withheld[t] = "(name withheld)"
+    word_map = {**flat, **withheld}
+    rx = None
+    if word_map:
+        alt = "|".join(re.escape(n) for n in sorted(word_map, key=len, reverse=True))
+        rx = re.compile(r"(?<![A-Za-z0-9_])(?:" + alt + r")(?![A-Za-z0-9_])")
+
+    def text(v):
+        return rx.sub(lambda m: word_map[m.group(0)], v) if (rx and isinstance(v, str)) else v
+
+    def val(kind, v):
+        return maps[kind].get(v, v) if isinstance(v, str) else v
+
+    out = json.loads(json.dumps(data))  # a private copy; the caller's structure is not modified
+    for sec in (out["overall"], out["chain"]):
+        sec["detail"] = text(sec.get("detail", ""))
+    for key in ("anchors", "witness"):
+        sec = out[key]
+        if "detail" in sec:
+            sec["detail"] = text(sec["detail"])
+        for row in sec.get("rows", []):
+            if row.get("sink_ref") is not None:
+                row["sink_ref"] = "(withheld)"
+    hb = out["heartbeats"]
+    if "detail" in hb:
+        hb["detail"] = text(hb["detail"])
+    if "recorders" in hb:
+        hb["recorders"] = sorted(val("recorder", x) for x in hb["recorders"])
+        hb["tool_lists"] = sorted(val("tool", x) for x in hb["tool_lists"])
+        hb["tool_changes"] = [{**c, "added": [val("tool", x) for x in c["added"]],
+                               "removed": [val("tool", x) for x in c["removed"]]} for c in hb["tool_changes"]]
+    rf = out["refusals"]
+    if rf.get("by_tool") is not None:
+        rf["by_tool"] = {val("tool", k): v for k, v in rf["by_tool"].items()}
+        rf["by_agent"] = {val("agent", k): v for k, v in rf["by_agent"].items()}
+    a2a = out["a2a"]
+    if "detail" in a2a:
+        a2a["detail"] = text(a2a["detail"])
+        a2a["findings"] = [{**f, "agent_id": val("agent", f.get("agent_id")), "peer": val("agent", f.get("peer")),
+                            "ledger": "(name withheld)"} for f in a2a["findings"]]
+    for i in out["inputs"]:
+        i["name"] = f"({i['role']}: name withheld)"
+    return out
 
 
 # --------------------------------------------------------------------------------------------- document model
@@ -471,10 +511,20 @@ def _doc(data: dict) -> tuple[list, list]:
     o = data["overall"]
     ex = explain(o["status"])
     B.append(("h1", "auditrail verification report"))
+    unmasked = " It was NOT masked by --redact." if data.get("redacted") else ""
     if data.get("title"):
-        B.append(("p", f"Title (supplied by whoever generated this report; not examined): {data['title']}"))
+        B.append(("p", f"Title (supplied by whoever generated this report; not examined): {data['title']}.{unmasked}"))
     if data.get("note"):
-        B.append(("p", f"Note (supplied by whoever generated this report; not examined): {data['note']}"))
+        B.append(("p", f"Note (supplied by whoever generated this report; not examined): {data['note']}.{unmasked}"))
+    if data.get("redacted"):
+        salted = (data.get("redaction") or {}).get("salted")
+        B.append(("p", "Names of agents, tools and recorders in this report have been masked by codes. The codes are not "
+                       "secrets: " + ("they were mixed with a salt that was supplied when the report was made, but a "
+                                      "name that is easy to guess can still be recovered by anyone who holds the salt "
+                                      "or can try it." if salted else
+                                      "no salt was supplied, so a low-entropy name can be recovered by guessing it and "
+                                      "computing the same code.")))
+        B.append(("p", f"Not masked: {REDACTION_NOT_MASKED}. The title and the note above are not masked either."))
     B.append(("p", f"Report fingerprint (sha256 of the body, excluding the timestamp line): {data['fingerprint_sha256']}"))
     B.append(("p", f"Generated: {data['generated_at'] or 'not stamped (pass --generated-at to add a timestamp)'}"))
 
