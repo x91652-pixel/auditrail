@@ -1,7 +1,8 @@
 # `auditrail report` and the MVP demo
 
-Status: **design proposal, not implemented.** Nothing in `src/`, `verifier/`, `tests/`, `docs/spec/` or the
-vectors changes with this document. Baseline: `hardening-fixes@0bc245b`.
+Status: **decided (D-13, all eleven as recommended) and implemented on branch `report-command`** (`src/auditrail/report.py`,
+`tools/gen_limits.py`, `src/auditrail/_limits.py`, `examples/mvp_demo/`). Written against `hardening-fixes@0bc245b`; the
+differences found while implementing are listed at the end of this note.
 
 Goal (user option B): the demo ends in **a document a person who is not an engineer can read**, and that document
 is as careful about what it did *not* check as the verifier is.
@@ -255,7 +256,7 @@ its own plain output. No change to the evidence format or the vectors.
 - A2A section with matched / one-sided / rejected / unsupplied ledgers (4);
 - demo: `examples.mvp_demo.run` returns 0 and produces the expected statuses (3–4).
 
-### 5.3 Compatibility with D-11 (reserved, not implemented)
+### 5.3 Compatibility with D-11 (now implemented)
 
 The explanation table is keyed by status string with a fallback, so `UNSUPPORTED_ALGORITHM` and
 `UNSUPPORTED_FORMAT` only need table entries when they exist (they are already listed above as reserved). The Keys
@@ -274,9 +275,9 @@ part of the report format depends on D-11 being accepted.
 
 ---
 
-## 6. Decisions needed from a person (with a recommendation)
+## 6. Decisions (D-13: all eleven taken as recommended)
 
-| # | question | recommendation |
+| # | question | decision |
 |---|---|---|
 | 1 | HTML self-contained (inline CSS, no JS, no external resources)? | **Yes.** It can be emailed or opened offline, and nothing in it can phone home. |
 | 2 | Also emit JSON (`--format json`)? | **Yes**, same data as the document, stable key order; it is what an auditor's tooling would consume and what tests assert against. |
@@ -303,3 +304,22 @@ part of the report format depends on D-11 being accepted.
 - No signing, encryption or retention of the report; no replacement for running `verify` and keeping the witness copy.
 - No new evidence: the report reads what the ledger, anchors, witness and peer ledgers already contain.
 - No change to the evidence format, the verifiers' behaviour, or any status code.
+
+---
+
+## 8. What changed between this design and the implementation
+
+- **Statuses.** D-11 and D-14 landed first, so the explanation table contains `UNSUPPORTED_ALGORITHM` and
+  `UNSUPPORTED_FORMAT` as real entries, and says that for a key read from a `.pub` file `UNSUPPORTED_ALGORITHM`
+  cannot occur (a claimed algorithm other than the key's is `BAD_SIGNATURE`, "algorithm mismatch"). Both are worded
+  as inconclusive and provokable, never as "untouched".
+- **Order.** The overall status is `verify_all`'s, so the spec 6.1 precedence holds by construction. The report's
+  per-check details are collected separately; after a failed chain or signature every later section says "not
+  evaluated" and no table is computed from those records.
+- **`verifier.py` was not changed.** The report needed no new helper: `check_heartbeats`, `_read_records`,
+  `check_chain`, `verify_anchors` and `verify_witness_file` already expose what it uses, and the policy timeline and
+  tool-change lists are computed in `report.py`.
+- **Output paths.** With `--format all`, `--out PREFIX` writes `PREFIX.md`, `PREFIX.html` and `PREFIX.json`.
+- **MVP step 4** verifies with the public key and the witness copy only (the owner's `anchors.jsonl` names its
+  sink as a relative `file:` reference that a verifier given no sink mapping reports as `SINK_UNREACHABLE`; the
+  witness copy is what a third party holds anyway).

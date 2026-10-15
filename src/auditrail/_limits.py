@@ -3,7 +3,7 @@
 The bold lead sentence of every limit in SECURITY.md ("What v0.2 does NOT do" and "Where the tests do not
 reach"), and the SHA-256 of the SECURITY.md text (line endings normalised to LF) they were taken from."""
 
-SOURCE_SHA256 = 'bd697c2e1932078de1ec0123efda400a3161bbe0f30615f665e608a04294786b'
+SOURCE_SHA256 = 'aae17184b32e191c699969bb41af34ab039ad40ebcd5a0abc1a2a5d2d1d8a3bf'
 
 ITEMS = (
     ('About the evidence', 'It cannot prove a tool call was recorded if the tool was never wrapped.'),
@@ -23,6 +23,7 @@ ITEMS = (
     ('About isolation', 'The environment filter is an allow-list'),
     ('About scope', 'No supply-chain verification (ASI04), no memory/context-poisoning detection (ASI06), no cascading-failure containment (ASI08)'),
     ('About scope', 'No steganography detection.'),
+    ('About scope', "`auditrail report` is a rendering of the verifier's output, not new evidence."),
     ('About scope', 'Not a certified compliance product.'),
     ('Where the tests do not reach', 'Inconclusive results and the algorithm-mismatch rule.'),
     ('Where the tests do not reach', 'Algorithm agility is reserved, not implemented.'),
