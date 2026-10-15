@@ -171,6 +171,54 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return run_demo()
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    from . import _strict
+    from .report import DEFAULT_MAX_ROWS, build_report, render_html, render_json, render_md
+
+    ledger = Path(args.ledger_path)
+    if not ledger.is_file():
+        print(f"[ERROR] {args.ledger_path}: file not found (no report was produced)", file=sys.stderr)
+        return 2
+    stamp = None
+    if args.generated_at:
+        if args.generated_at == "now":
+            import time as _time
+
+            stamp = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        elif _strict.parse_ts(args.generated_at) is not None:
+            stamp = args.generated_at
+        else:
+            print("[ERROR] --generated-at must be 'now' or YYYY-MM-DDTHH:MM:SSZ", file=sys.stderr)
+            return 2
+    for p in [*(args.pubkey or []), args.anchors, args.witness_file, *(args.peer_ledger or [])]:
+        if p and not Path(p).is_file():
+            print(f"[ERROR] {p}: file not found (no report was produced)", file=sys.stderr)
+            return 2
+    try:
+        data = build_report(
+            ledger, public_key_paths=args.pubkey or (), anchors_path=args.anchors, witness_path=args.witness_file,
+            git_repo=args.git_repo, max_gap_s=args.max_gap, peer_ledgers=args.peer_ledger or (),
+            agents=args.agent or (), title=args.title, note=args.note, redact=args.redact, generated_at=stamp,
+            max_rows=args.max_rows if args.max_rows is not None else DEFAULT_MAX_ROWS)
+    except (ValueError, OSError) as exc:
+        print(f"[ERROR] {exc} (no report was produced)", file=sys.stderr)
+        return 2
+    outputs = {"md": render_md, "html": render_html, "json": render_json}
+    formats = ["md", "html", "json"] if args.format == "all" else [args.format]
+    if args.out in (None, "-"):
+        if len(formats) != 1:
+            print("[ERROR] --format all needs --out PREFIX (it writes PREFIX.md, PREFIX.html, PREFIX.json)", file=sys.stderr)
+            return 2
+        sys.stdout.write(outputs[formats[0]](data))
+    else:
+        for f in formats:
+            path = Path(args.out + "." + f) if args.format == "all" else Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(outputs[f](data), encoding="utf-8", newline="\n")
+            print(f"[REPORT] wrote {path}")
+    return 0 if data["overall"]["status"] == "OK" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="auditrail", description="Tamper-evident audit trails for AI agents.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -229,6 +277,24 @@ def build_parser() -> argparse.ArgumentParser:
                       "Use it when an agent's ledger may be empty.")
     p_rc.add_argument("--json", action="store_true")
     p_rc.set_defaults(func=cmd_reconcile)
+
+    p_rep = sub.add_parser("report", help="Write a readable report of what a verification found and did not examine.")
+    p_rep.add_argument("ledger_path")
+    p_rep.add_argument("--pubkey", action="append", help="Trusted recorder public key (.pub). Repeatable.")
+    p_rep.add_argument("--anchors", help="The owner's anchors.jsonl.")
+    p_rep.add_argument("--witness-file", help="A copy of the anchor lines a witness holds.")
+    p_rep.add_argument("--git-repo", help="Git witness repository for the anchors file's git sink references.")
+    p_rep.add_argument("--max-gap", type=int, help="Heartbeat gap limit in seconds.")
+    p_rep.add_argument("--peer-ledger", action="append", help="Another party's ledger, for the agent-to-agent section.")
+    p_rep.add_argument("--agent", action="append", help="Agent id whose ledger is among those given (repeatable).")
+    p_rep.add_argument("--format", choices=["md", "html", "json", "all"], default="md")
+    p_rep.add_argument("--out", help="Output file (or, with --format all, a path prefix). Default: standard output.")
+    p_rep.add_argument("--title", help="Printed at the top, labelled as supplied and not examined.")
+    p_rep.add_argument("--note", help="Printed at the top, labelled as supplied and not examined.")
+    p_rep.add_argument("--generated-at", help="'now' or YYYY-MM-DDTHH:MM:SSZ. Without it the report has no timestamp.")
+    p_rep.add_argument("--redact", action="store_true", help="Replace agent, tool and recorder names by stable digests.")
+    p_rep.add_argument("--max-rows", type=int, help="Rows shown in long lists (counts are always complete).")
+    p_rep.set_defaults(func=cmd_report)
 
     p_lint = sub.add_parser("lint", help="Validate a policy YAML file.")
     p_lint.add_argument("policy_path")

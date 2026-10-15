@@ -1,0 +1,770 @@
+"""`auditrail report`: a human-readable account of what a verification found and what it did not examine.
+
+A report is a *rendering* of the verifier's results, not new evidence and not a verdict:
+
+* it is a pure function of its input files, the auditrail version and the options (no clock, no network, no
+  LLM); the same inputs give byte-identical output, and the only line that can differ is an optional,
+  explicitly requested timestamp, which is outside the fingerprint;
+* the overall status is the verifier's own (`verify_all`, spec section 6.1); the per-section detail is
+  collected so that a later finding is still shown after an earlier failure, but nothing computed from records
+  that failed the chain or signature checks is presented as fact;
+* every status string the verifiers can emit has an entry in STATUS_TABLE, and an unknown status is shown as
+  inconclusive, never as consistent;
+* the section "What this report does not prove" is fixed and cannot be switched off.
+
+All user-facing words live in the tables at the top of this module.
+"""
+from __future__ import annotations
+
+import hashlib
+import html
+import json
+import re
+from pathlib import Path
+from typing import Any, Optional
+
+from . import __version__, _strict
+from .anchor import _anchor_lines, verify_anchors, verify_witness_file
+from .keys import key_algorithm, key_id_for, load_public_keys
+from .reconcile import reconcile
+from .verifier import INCONCLUSIVE, _read_records, check_chain, check_heartbeats, verify_all
+
+REPORT_VERSION = 1
+DEFAULT_MAX_ROWS = 50
+
+# --------------------------------------------------------------------------------------------- wording
+# class: consistent | definite | malformed | inconclusive | completeness
+STATUS_TABLE: dict[str, dict[str, str]] = {
+    "OK": dict(
+        cls="consistent", label="No inconsistency found",
+        means="The checks that were run found no inconsistency in the evidence they covered.",
+        not_means="It does not mean the recorded actions were appropriate, that nothing happened outside the "
+                  "wrapped tools, or that anything not listed under 'Checks that ran' was examined."),
+    "TAMPERED_LEDGER": dict(
+        cls="definite", label="Records do not match their own hashes or links",
+        means="From the reported seq onward the records do not match the hash chain, or the file could not be "
+              "read under the format's rules. Records before that point are consistent with each other.",
+        not_means="It does not say who changed the file or why."),
+    "UNSIGNED_RECORD": dict(
+        cls="definite", label="A record carries no signature",
+        means="Signatures were required and a record has none.",
+        not_means="It does not say the record's content is wrong, only that nothing vouches for it."),
+    "UNKNOWN_KEY": dict(
+        cls="definite", label="A record names a key that was not given",
+        means="A record names a key id that is not among the trusted keys supplied.",
+        not_means="It may simply be the wrong key file; it does not by itself show an alteration."),
+    "BAD_SIGNATURE": dict(
+        cls="definite", label="A signature does not verify or names the wrong algorithm",
+        means="A record or anchor has a signature that does not verify under the trusted key, or it claims a "
+              "signature algorithm other than its trusted key's (\"algorithm mismatch\").",
+        not_means="It does not say who made the change."),
+    "MALFORMED_RECORD": dict(
+        cls="malformed", label="A record breaks the format's field rules",
+        means="The record is internally consistent but a field the format constrains is not valid.",
+        not_means="It is not a hash or signature failure, and it does not say the record was altered."),
+    "TAMPERED_ANCHOR": dict(
+        cls="definite", label="The anchors file or witness copy was altered",
+        means="An anchor line is malformed, does not match its own hash, or does not chain to the previous one.",
+        not_means="It does not say the ledger itself was altered."),
+    "UNSIGNED_ANCHOR": dict(
+        cls="definite", label="An anchor lacks the required signature",
+        means="Signatures were required and an anchor line is unsigned.",
+        not_means="It does not say the ledger was altered."),
+    "TRUNCATED": dict(
+        cls="definite", label="Records the witness vouches for are missing",
+        means="The witness copy holds an anchor for a record the ledger no longer has.",
+        not_means="It does not say how or by whom the records were removed."),
+    "REWRITTEN": dict(
+        cls="definite", label="A witnessed record was changed",
+        means="A record that the witness copy vouches for no longer matches what was published.",
+        not_means="It does not say what the original content was."),
+    "SINK_MISMATCH": dict(
+        cls="definite", label="The witness does not hold a claimed anchor",
+        means="An anchor the owner's file says was published is not in the witness.",
+        not_means="It does not say the ledger was altered."),
+    "SINK_UNREACHABLE": dict(
+        cls="inconclusive", label="A witness could not be read",
+        means="A configured witness could not be read, so those anchors were not checked.",
+        not_means="It is not evidence of an alteration, and it does not mean the anchors were checked."),
+    "NO_HEARTBEAT": dict(
+        cls="completeness", label="No heartbeat was recorded",
+        means="A heartbeat limit was given and the ledger holds no heartbeat record at all.",
+        not_means="It does not show what, if anything, ran without being recorded."),
+    "UNRECORDED_CALLS": dict(
+        cls="completeness", label="The recorder counted calls it did not record",
+        means="A heartbeat reports more calls intercepted than recorded.",
+        not_means="It does not say what those calls were."),
+    "HEARTBEAT_GAP": dict(
+        cls="completeness", label="A silent period exceeds the limit",
+        means="There is a period longer than the given limit with no heartbeat.",
+        not_means="It does not show what happened during the period."),
+    "LEGACY_FORMAT": dict(
+        cls="inconclusive", label="An old (v0.1) ledger",
+        means="The ledger predates signed evidence and is not examined by these checks.",
+        not_means="It is not a finding about the ledger's content; `verify --legacy-v01` gives only a "
+                  "hash-chain check."),
+    "UNSUPPORTED_ALGORITHM": dict(
+        cls="inconclusive", label="A signature algorithm this verifier cannot check",
+        means="The trusted key is registered as an algorithm this verifier does not implement, so signatures "
+              "made with it could not be checked. For a key read from a file this status cannot occur: such a "
+              "key is Ed25519, and a record claiming another algorithm is reported as BAD_SIGNATURE "
+              "(\"algorithm mismatch\").",
+        not_means="It can be provoked by someone who does not hold the key, so it never means the records "
+                  "were left unchanged; a definite finding always outranks it."),
+    "UNSUPPORTED_FORMAT": dict(
+        cls="inconclusive", label="A record format this verifier does not read",
+        means="A record declares a format other than the one this verifier reads, although its hash holds.",
+        not_means="It can be provoked by someone who does not hold the key, so it never means the records "
+                  "were left unchanged; a definite finding always outranks it."),
+}
+FINDING_TABLE: dict[str, dict[str, str]] = {
+    "MISMATCH": dict(label="Messages recorded by one side only",
+                     means="At least one agent-to-agent message appears in only one of the supplied ledgers."),
+    "RECV_WITHOUT_SEND": dict(label="Received, never recorded as sent",
+                              means="A receiver recorded a message that the sender's ledger does not contain."),
+    "SEND_WITHOUT_RECV": dict(label="Sent, never recorded as received",
+                              means="A sender recorded a message that the receiver's ledger does not contain."),
+    "ACK_WITHOUT_RECV": dict(label="Receipt without a recorded receive",
+                             means="A receipt was recorded for a message the receiver's ledger does not hold."),
+}
+UNKNOWN_STATUS = dict(
+    cls="inconclusive", label="A status this report version cannot explain",
+    means="The verifier returned a status that this report has no wording for.",
+    not_means="It is shown as inconclusive and is never treated as a consistent result.")
+
+# Statements that are always printed, whatever SECURITY.md generated (a floor, not a replacement).
+LIMITS_FLOOR = (
+    "Only tool calls that went through the recorder's wrapped tools are seen here; an action by an unwrapped "
+    "tool leaves no record.",
+    "Records after the last anchor held by a witness are not covered by it.",
+    "Nothing is established if the recorder's host or signing key was compromised.",
+    "A witness that colludes with the operator defeats the anchors.",
+    "This report examines evidence; it does not judge whether the recorded actions were appropriate.",
+)
+
+NOT_VOCAB = re.compile(
+    r"\b(safe|safely|safety|secure|securely|security|compliant|compliance|certified|certify|certification|"
+    r"approved|approve|approval|passed|guarantee|guaranteed|guarantees|audited)\b", re.I)
+
+REASON_CLASSES = (
+    ("lethal_trifecta", "lethal_trifecta"),
+    ("unclassified_tool", "unclassified_tool"),
+    ("state_change_after_untrusted", "state_change_after_untrusted"),
+    ("label_conflict", "label_conflict"),
+)
+
+
+def explain(status: str) -> dict[str, str]:
+    return STATUS_TABLE.get(status) or UNKNOWN_STATUS
+
+
+def _is_definite(status: str) -> bool:
+    return explain(status)["cls"] in ("definite", "malformed", "completeness")
+
+
+# --------------------------------------------------------------------------------------------- limits
+def _limits() -> tuple[str, tuple]:
+    from . import _limits as gen
+
+    return gen.SOURCE_SHA256, gen.ITEMS
+
+
+# --------------------------------------------------------------------------------------------- collection
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _reason_class(reason: Optional[str]) -> str:
+    r = reason or ""
+    for prefix, name in REASON_CLASSES:
+        if r.startswith(prefix):
+            return name
+    if "is not allow-listed" in r:
+        return "not_allow_listed"
+    return "other"
+
+
+def _tool_changes(beats: list[dict]) -> list[dict]:
+    out, prev = [], None
+    for b in beats:
+        if prev is not None:
+            added = sorted(set(b.get("tools", [])) - set(prev.get("tools", [])))
+            removed = sorted(set(prev.get("tools", [])) - set(b.get("tools", [])))
+            if added or removed:
+                out.append({"seq": b["seq"], "ts": b["ts"], "added": added, "removed": removed})
+        prev = b
+    return out
+
+
+def _policy_timeline(records: list[dict]) -> list[dict]:
+    runs: list[dict] = []
+    for r in records:
+        h = r.get("policy_hash")
+        if r.get("kind", "call") != "call" or h is None:
+            continue
+        if runs and runs[-1]["policy_hash"] == h:
+            runs[-1]["last_seq"], runs[-1]["last_ts"] = r["seq"], r["ts"]
+        else:
+            runs.append({"policy_hash": h, "policy_version": r.get("policy_version"), "first_seq": r["seq"],
+                         "first_ts": r["ts"], "last_seq": r["seq"], "last_ts": r["ts"]})
+    return runs
+
+
+def build_report(
+    ledger_path,
+    *,
+    public_key_paths=(),
+    anchors_path=None,
+    witness_path=None,
+    git_repo=None,
+    max_gap_s: Optional[int] = None,
+    peer_ledgers=(),
+    agents=(),
+    title: Optional[str] = None,
+    note: Optional[str] = None,
+    redact: bool = False,
+    generated_at: Optional[str] = None,
+    max_rows: int = DEFAULT_MAX_ROWS,
+) -> dict:
+    """Collect everything a report states, as plain data. Raises FileNotFoundError/ValueError on unusable input."""
+    ledger = Path(ledger_path)
+    raw = ledger.read_bytes()  # FileNotFoundError: no report is produced for evidence that cannot be read
+    keys = load_public_keys([Path(p) for p in public_key_paths]) if public_key_paths else None  # ValueError
+    sinks = {}
+    if git_repo:
+        from .anchor import GitSink
+
+        sinks["git"] = GitSink(git_repo)
+
+    inputs = [{"role": "ledger", "name": ledger.name, "sha256": _sha(raw), "bytes": len(raw)}]
+    for role, p in [("public key", p) for p in public_key_paths] + [("anchors", anchors_path), ("witness copy", witness_path)] \
+            + [("peer ledger", p) for p in peer_ledgers]:
+        if p:
+            b = Path(p).read_bytes()
+            inputs.append({"role": role, "name": Path(p).name, "sha256": _sha(b), "bytes": len(b)})
+
+    overall = verify_all(ledger, public_keys=keys, anchors_path=anchors_path, sinks=sinks or None,
+                         witness_path=witness_path, max_gap_s=max_gap_s)
+    records, read_problem = _read_records(ledger)
+    chain_problem = None if read_problem else check_chain(ledger, public_keys=keys, records=records)
+    if read_problem is not None:
+        chain_state = "unreadable" if read_problem["status"] != "LEGACY_FORMAT" else "legacy"
+    elif chain_problem is None:
+        chain_state = "consistent"
+    elif chain_problem["status"] in INCONCLUSIVE:
+        chain_state = "inconclusive"
+    else:
+        chain_state = "failed"
+    evaluable = chain_state in ("consistent", "inconclusive")
+
+    data: dict[str, Any] = {
+        "report_version": REPORT_VERSION,
+        "auditrail_version": __version__,
+        "title": title,
+        "note": note,
+        "redacted": redact,
+        "max_rows": max_rows,
+        "inputs": inputs,
+        "overall": {"status": overall["status"], "detail": overall.get("detail", ""),
+                    "bad_seq": overall.get("bad_seq"), "anchored_upto": overall.get("anchored_upto"),
+                    "unanchored_tail": overall.get("unanchored_tail")},
+        "chain": {"state": chain_state,
+                  "status": (read_problem or chain_problem or {}).get("status", "OK"),
+                  "detail": (read_problem or chain_problem or {}).get("detail", ""),
+                  "bad_seq": (read_problem or chain_problem or {}).get("bad_seq")},
+        "signatures_required": keys is not None,
+        "unchecked_algorithms": overall.get("unchecked_algorithms", []),
+    }
+
+    # --- scope
+    if evaluable and records:
+        kinds: dict[str, int] = {}
+        for r in records:
+            kinds[r.get("kind", "call")] = kinds.get(r.get("kind", "call"), 0) + 1
+        data["scope"] = {"records": len(records), "first_seq": records[0]["seq"], "last_seq": records[-1]["seq"],
+                         "first_ts": records[0].get("ts"), "last_ts": records[-1].get("ts"), "kinds": kinds}
+    elif evaluable:
+        data["scope"] = {"records": 0, "kinds": {}}
+    else:
+        data["scope"] = None
+        prefix = chain_problem.get("bad_seq") if chain_problem else None
+        data["verified_prefix"] = prefix if isinstance(prefix, int) else None
+
+    # --- keys
+    key_rows = []
+    for kid, pub in sorted((keys or {}).items()):
+        key_rows.append({"key_id": kid, "fingerprint_sha256": hashlib.sha256(bytes.fromhex(pub)).hexdigest(),
+                         "algorithm": key_algorithm(keys, kid)})
+    data["keys"] = key_rows
+    if evaluable:
+        data["record_key_ids"] = sorted({r["key_id"] for r in records if isinstance(r.get("key_id"), str)})
+        data["record_algorithms"] = sorted({r.get("sig_alg", "ed25519") for r in records if "sig" in r})
+
+    # --- anchors and witness
+    def anchor_section(path, runner):
+        if path is None:
+            return {"given": False}
+        lines, _ = _anchor_lines(Path(path))
+        rows = [{"seq": a.get("seq"), "created_at": a.get("created_at"), "key_id": a.get("key_id"),
+                 "version": a.get("anchor_version"), "sig_alg": a.get("sig_alg", "ed25519" if "sig" in a else None),
+                 "sink_ref": a.get("sink_ref")} for _, a in lines if isinstance(a, dict)]
+        if not evaluable:
+            return {"given": True, "evaluated": False, "lines": len(rows), "rows": []}
+        res = runner()
+        return {"given": True, "evaluated": True, "status": res["status"], "detail": res.get("detail", ""),
+                "anchored_upto": res.get("anchored_upto"), "unanchored_tail": res.get("unanchored_tail"),
+                "lines": len(rows), "rows": rows[:max_rows], "rows_hidden": max(0, len(rows) - max_rows)}
+
+    data["anchors"] = anchor_section(
+        anchors_path, lambda: verify_anchors(ledger, anchors_path, sinks=sinks or None, public_keys=keys,
+                                             records=records))
+    data["witness"] = anchor_section(
+        witness_path, lambda: verify_witness_file(records, witness_path, public_keys=keys))
+    covered = [s.get("anchored_upto") for s in (data["anchors"], data["witness"])
+               if s.get("evaluated") and s.get("anchored_upto") is not None]
+    if evaluable:
+        upto = max(covered) if covered else None
+        total = len(records)
+        data["coverage"] = {"anchored_upto": upto,
+                            "unanchored_tail": (total - (upto + 1)) if upto is not None else total,
+                            "tail_first_seq": (upto + 1) if upto is not None else (records[0]["seq"] if records else None),
+                            "tail_last_seq": records[-1]["seq"] if records else None}
+    else:
+        data["coverage"] = None
+
+    # --- heartbeats
+    beats = [r for r in records if r.get("kind") == "heartbeat"] if evaluable else []
+    hb: dict[str, Any] = {"evaluated": evaluable, "max_gap_s": max_gap_s, "count": len(beats)}
+    if evaluable:
+        hb["recorders"] = sorted({str(b.get("recorder_id")) for b in beats})
+        hb["tool_lists"] = sorted({t for b in beats for t in b.get("tools", [])})
+        hb["calls_attempted"] = sum(b.get("calls_attempted", 0) for b in beats if isinstance(b.get("calls_attempted"), int))
+        hb["calls_recorded"] = sum(b.get("calls_recorded", 0) for b in beats if isinstance(b.get("calls_recorded"), int))
+        hb["tool_changes"] = _tool_changes(beats)
+        if max_gap_s is not None:
+            problem, _changes = check_heartbeats(records, max_gap_s)
+            hb["status"] = problem["status"] if problem else "OK"
+            hb["detail"] = problem["detail"] if problem else "no period longer than the limit without a heartbeat"
+            hb["gaps"] = (problem or {}).get("gaps", [])
+        else:
+            hb["status"] = None
+    data["heartbeats"] = hb
+
+    # --- policy timeline
+    data["policy"] = {"evaluated": evaluable, "runs": _policy_timeline(records) if evaluable else []}
+
+    # --- refusals
+    ref: dict[str, Any] = {"evaluated": evaluable}
+    if evaluable:
+        decisions: dict[str, int] = {}
+        by_class: dict[str, int] = {}
+        by_tool: dict[str, int] = {}
+        by_agent: dict[str, int] = {}
+        for r in records:
+            if r.get("kind", "call") != "call":
+                continue
+            d = r.get("decision", "?")
+            decisions[d] = decisions.get(d, 0) + 1
+            if d in ("deny", "error"):
+                c = _reason_class(r.get("reason")) if d == "deny" else "error"
+                by_class[c] = by_class.get(c, 0) + 1
+                by_tool[str(r.get("tool"))] = by_tool.get(str(r.get("tool")), 0) + 1
+                by_agent[str(r.get("agent_id"))] = by_agent.get(str(r.get("agent_id")), 0) + 1
+        ref.update(decisions=decisions, by_class=by_class, by_tool=by_tool, by_agent=by_agent)
+    data["refusals"] = ref
+
+    # --- agent-to-agent
+    a2a: dict[str, Any] = {"given": bool(peer_ledgers)}
+    if peer_ledgers:
+        if evaluable:
+            res = reconcile([str(ledger), *[str(p) for p in peer_ledgers]], public_keys=keys, agents=list(agents))
+            a2a.update(evaluated=True, status=res["status"], detail=res.get("detail", ""),
+                       matched=res.get("matched"), unverifiable=res.get("unverifiable"),
+                       findings=res.get("findings", [])[:max_rows],
+                       findings_hidden=max(0, len(res.get("findings", [])) - max_rows),
+                       rejected=len(res.get("rejected", [])))
+        else:
+            a2a["evaluated"] = False
+    else:
+        a2a["a2a_records_in_this_ledger"] = {k: v for k, v in (data["scope"] or {}).get("kinds", {}).items()
+                                              if k.startswith("a2a")}
+    data["a2a"] = a2a
+
+    # --- not checked
+    nc = []
+    if keys is None:
+        nc.append("Signatures were NOT CHECKED (no public key was given): anyone who could write the file could "
+                  "have rewritten the chain consistently.")
+    if anchors_path is None and witness_path is None:
+        nc.append("No anchors or witness copy were given: removal of records and whole-chain rewrites are not "
+                  "detectable from this input.")
+    if max_gap_s is None:
+        nc.append("Heartbeats were NOT CHECKED (no gap limit was given): silent periods are not detectable.")
+    for alg in data["unchecked_algorithms"]:
+        nc.append(f"Signatures made with algorithm '{alg}' were NOT CHECKED: this verifier cannot check them.")
+    for name, sec in (("anchors", data["anchors"]), ("witness copy", data["witness"])):
+        if sec.get("given") and sec.get("evaluated") and sec.get("status") == "SINK_UNREACHABLE":
+            nc.append(f"The {name} could not be read: those anchors were not checked.")
+        if sec.get("given") and sec.get("evaluated") is False:
+            nc.append(f"The {name} were not evaluated because the records failed an earlier check.")
+    data["not_checked"] = nc
+
+    # --- redaction (applied to the whole structure below)
+    if redact:
+        names = {"agent": set(), "tool": set(), "recorder": set()}
+        for r in records:
+            if isinstance(r.get("agent_id"), str):
+                names["agent"].add(r["agent_id"])
+            if isinstance(r.get("peer"), str):
+                names["agent"].add(r["peer"])
+            if isinstance(r.get("tool"), str):
+                names["tool"].add(r["tool"])
+            if isinstance(r.get("recorder_id"), str):
+                names["recorder"].add(r["recorder_id"])
+            for t in r.get("tools", []) if isinstance(r.get("tools"), list) else []:
+                if isinstance(t, str):
+                    names["tool"].add(t)
+        for a in agents:
+            names["agent"].add(a)
+        mapping = {}
+        for kind, group in names.items():
+            for n in group:
+                mapping[n] = f"{kind}-" + hashlib.sha256(f"{kind}:{n}".encode("utf-8")).hexdigest()[:8]
+        data = _apply_mapping(data, mapping)
+        for i in data["inputs"]:
+            i["name"] = f"({i['role']}: name withheld)"
+
+    # --- fingerprint (everything above; the optional stamp is added afterwards and is not part of it)
+    body = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    data["fingerprint_sha256"] = _sha(body.encode("utf-8"))
+    data["generated_at"] = generated_at
+    return data
+
+
+def _apply_mapping(obj: Any, mapping: dict[str, str]) -> Any:
+    if not mapping:
+        return obj
+    ordered = sorted(mapping, key=len, reverse=True)
+
+    def sub(text: str) -> str:
+        for n in ordered:
+            if n and n in text:
+                text = text.replace(n, mapping[n])
+        return text
+
+    def walk(x):
+        if isinstance(x, str):
+            return sub(x)
+        if isinstance(x, list):
+            return [walk(i) for i in x]
+        if isinstance(x, dict):
+            return {sub(k) if isinstance(k, str) else k: walk(v) for k, v in x.items()}
+        return x
+
+    return walk(obj)
+
+
+# --------------------------------------------------------------------------------------------- document model
+def _doc(data: dict) -> tuple[list, list]:
+    """Return (blocks before the fixed section, blocks of the fixed section). A block is a tuple."""
+    B: list = []
+    o = data["overall"]
+    ex = explain(o["status"])
+    B.append(("h1", "auditrail verification report"))
+    if data.get("title"):
+        B.append(("p", f"Title (supplied by whoever generated this report; not examined): {data['title']}"))
+    if data.get("note"):
+        B.append(("p", f"Note (supplied by whoever generated this report; not examined): {data['note']}"))
+    B.append(("p", f"Report fingerprint (sha256 of the body, excluding the timestamp line): {data['fingerprint_sha256']}"))
+    B.append(("p", f"Generated: {data['generated_at'] or 'not stamped (pass --generated-at to add a timestamp)'}"))
+
+    # 1 Result
+    B.append(("h2", "1. Result"))
+    if o["status"] == "OK":
+        B.append(("p", "The checks listed under 'Checks that ran' found no inconsistency in the records they covered."))
+    elif ex["cls"] == "inconclusive":
+        B.append(("p", f"No definite finding was made, but the examination is incomplete: {o['status']} "
+                       f"({ex['label']}). This is not a consistent result."))
+    else:
+        at = f" at seq {o['bad_seq']}" if o.get("bad_seq") is not None else ""
+        B.append(("p", f"A finding was made: {o['status']}{at} ({ex['label']})."))
+    B.append(("p", f"Verifier status: {o['status']}. {ex['means']}"))
+    if o.get("detail"):
+        B.append(("p", f"Verifier detail: {o['detail']}"))
+    B.append(("p", "What this does not cover: " + ex["not_means"]))
+    B.append(("p", "This report covers only tool calls that went through the recorder's wrapped tools. The tool list "
+                   "shown under 'Heartbeats' is what the recorder reports as wrapped, not a statement of what the "
+                   "agent can do. An action by a tool that was not wrapped leaves no record, and this report cannot "
+                   "see it."))
+    cov = data.get("coverage")
+    if cov is not None and cov["unanchored_tail"]:
+        B.append(("p", f"Records {cov['tail_first_seq']} to {cov['tail_last_seq']} ({cov['unanchored_tail']} record(s)) "
+                       "come after the last anchor held by a witness, or no anchor was given. Changes in that range "
+                       "cannot be detected by anchors; without keys, or with only a witness copy, the result for "
+                       "them is OK with a note."))
+    B.append(("h3", "Checks that ran"))
+    ran = [f"Hash chain and field rules over the records (always)."]
+    if data["signatures_required"]:
+        ran.append("Signatures against the trusted keys given.")
+    if data["anchors"].get("given"):
+        ran.append("The owner's anchors file." if data["anchors"].get("evaluated") else "The owner's anchors file (not evaluated).")
+    if data["witness"].get("given"):
+        ran.append("The witness copy." if data["witness"].get("evaluated") else "The witness copy (not evaluated).")
+    if data["heartbeats"].get("max_gap_s") is not None:
+        ran.append(f"Heartbeats against a limit of {data['heartbeats']['max_gap_s']} seconds.")
+    if data["a2a"].get("given"):
+        ran.append("Agent-to-agent messages against the supplied peer ledgers.")
+    B.append(("ul", ran))
+    B.append(("h3", "Not checked"))
+    B.append(("ul", data["not_checked"] or ["Every check that was requested ran. The checks themselves have limits: see section 10."]))
+
+    # 2 Examined
+    B.append(("h2", "2. What was examined"))
+    B.append(("table", ["Role", "File", "SHA-256", "Bytes"],
+              [[i["role"], i["name"], i["sha256"], str(i["bytes"])] for i in data["inputs"]]))
+    B.append(("p", f"auditrail version {data['auditrail_version']}, report format {data['report_version']}."))
+    sc = data.get("scope")
+    if sc is None:
+        pre = data.get("verified_prefix")
+        B.append(("p", "The records failed an earlier check, so nothing computed from them is stated as fact. "
+                       + (f"Records before seq {pre} are consistent with each other." if pre else
+                          "No record is stated to be consistent.")))
+    elif sc["records"]:
+        B.append(("table", ["Records", "First seq", "Last seq", "First timestamp", "Last timestamp"],
+                  [[str(sc["records"]), str(sc["first_seq"]), str(sc["last_seq"]), str(sc["first_ts"]), str(sc["last_ts"])]]))
+        B.append(("table", ["Kind", "Count"], [[k, str(v)] for k, v in sorted(sc["kinds"].items())]))
+    else:
+        B.append(("p", "The ledger holds no records."))
+
+    # 3 Keys
+    B.append(("h2", "3. Keys"))
+    if data["keys"]:
+        B.append(("table", ["Key id", "SHA-256 of the public key", "Algorithm"],
+                  [[k["key_id"], k["fingerprint_sha256"], k["algorithm"]] for k in data["keys"]]))
+        B.append(("p", "Every record had to be signed by one of these keys." if data["signatures_required"] else ""))
+    else:
+        B.append(("p", "No trusted key was given, so signatures were not checked."))
+    if data.get("record_key_ids") is not None:
+        B.append(("p", f"Key ids named by the records: {', '.join(data['record_key_ids']) or 'none'}. "
+                       f"Signature algorithms named: {', '.join(data.get('record_algorithms') or []) or 'none'}."))
+
+    # 4 Outcome per check
+    B.append(("h2", "4. Verification outcome"))
+    rows = []
+    c = data["chain"]
+    rows.append(["Hash chain, signatures, field rules",
+                 "ran" if data["chain"]["state"] != "unreadable" else "could not be read",
+                 c["status"], explain(c["status"])["means"]])
+    for name, sec in (("Owner's anchors file", data["anchors"]), ("Witness copy", data["witness"])):
+        if not sec.get("given"):
+            rows.append([name, "not given", "-", "Not examined."])
+        elif not sec.get("evaluated"):
+            rows.append([name, "not evaluated", "-", "The records failed an earlier check; these lines cannot be relied on."])
+        else:
+            rows.append([name, "ran", sec["status"], explain(sec["status"])["means"]])
+    hb = data["heartbeats"]
+    if hb.get("status"):
+        rows.append(["Heartbeats", "ran", hb["status"], explain(hb["status"])["means"] if hb["status"] != "OK"
+                     else "No period longer than the limit without a heartbeat."])
+    else:
+        rows.append(["Heartbeats", "not checked" if hb.get("evaluated") else "not evaluated", "-",
+                     "No gap limit was given." if hb.get("evaluated") else "The records failed an earlier check."])
+    B.append(("table", ["Check", "State", "Status", "Meaning"], rows))
+    B.append(("h3", "What each status means"))
+    seen = sorted({r[2] for r in rows if r[2] not in ("-",)} | {o["status"]})
+    B.append(("table", ["Status", "Class", "Meaning", "What it does not mean"],
+              [[s, explain(s)["cls"], explain(s)["means"], explain(s)["not_means"]] for s in seen]))
+
+    # 5 Witness
+    B.append(("h2", "5. Witness and anchors"))
+    any_anchor = False
+    for name, sec in (("Owner's anchors file", data["anchors"]), ("Witness copy", data["witness"])):
+        if not sec.get("given"):
+            continue
+        any_anchor = True
+        if sec.get("evaluated"):
+            B.append(("p", f"{name}: {sec['lines']} line(s); status {sec['status']}. {sec.get('detail', '')}"))
+            B.append(("table", ["Seq", "Created", "Key id", "Version", "Algorithm", "Published as"],
+                      [[str(r["seq"]), str(r["created_at"]), str(r["key_id"]), str(r["version"]), str(r["sig_alg"]),
+                        str(r["sink_ref"] or "")] for r in sec["rows"]]))
+            if sec.get("rows_hidden"):
+                B.append(("p", f"({sec['rows_hidden']} more line(s) not shown; counts above are complete.)"))
+        else:
+            B.append(("p", f"{name}: {sec['lines']} line(s) present but not evaluated."))
+    if not any_anchor:
+        B.append(("p", "No anchors file and no witness copy were given."))
+    elif data["witness"].get("given") is False and data["anchors"].get("given"):
+        B.append(("p", "Only the owner's anchors file was given. A witness copy held outside the owner's control "
+                       "is what makes an anchor mean something."))
+    if cov is not None:
+        B.append(("p", f"Highest anchored seq: {cov['anchored_upto'] if cov['anchored_upto'] is not None else 'none'}. "
+                       f"Records after it: {cov['unanchored_tail']}."))
+
+    # 6 Heartbeats
+    B.append(("h2", "6. Heartbeats"))
+    if not hb.get("evaluated"):
+        B.append(("p", "Not evaluated: the records failed an earlier check."))
+    else:
+        B.append(("p", f"{hb['count']} heartbeat record(s) from recorder(s): {', '.join(hb['recorders']) or 'none'}. "
+                       f"Calls intercepted: {hb['calls_attempted']}; calls recorded: {hb['calls_recorded']}."))
+        B.append(("p", "The tool list the recorder reports as wrapped: " + (", ".join(hb["tool_lists"]) or "none reported") +
+                       ". An action by a tool that was not wrapped leaves no record, and this report cannot see it."
+                       + ("" if hb["count"] else " No heartbeat was recorded, so even the list of wrapped tools is unknown.")))
+        if hb.get("status") is None:
+            B.append(("p", "No gap limit was given, so silent periods were not checked."))
+        elif hb["status"] == "OK":
+            B.append(("p", f"No period longer than {hb['max_gap_s']} seconds without a heartbeat."))
+        else:
+            B.append(("p", f"{hb['status']}: {hb['detail']}"))
+            if hb.get("gaps"):
+                gaps = hb["gaps"][:data["max_rows"]]
+                B.append(("table", ["From", "To", "Seconds"], [[g["from"], g["to"], str(g["seconds"])] for g in gaps]))
+        if hb["tool_changes"]:
+            B.append(("table", ["Seq", "Timestamp", "Tools added", "Tools removed"],
+                      [[str(c["seq"]), c["ts"], ", ".join(c["added"]), ", ".join(c["removed"])]
+                       for c in hb["tool_changes"][:data["max_rows"]]]))
+
+    # 7 Policy
+    B.append(("h2", "7. Policy in force over time"))
+    pol = data["policy"]
+    if not pol["evaluated"]:
+        B.append(("p", "Not evaluated: the records failed an earlier check."))
+    elif pol["runs"]:
+        B.append(("table", ["Policy hash", "Version", "First seq", "Last seq", "First timestamp", "Last timestamp"],
+                  [[r["policy_hash"], str(r["policy_version"]), str(r["first_seq"]), str(r["last_seq"]), r["first_ts"], r["last_ts"]]
+                   for r in pol["runs"][:data["max_rows"]]]))
+    else:
+        B.append(("p", "No call record carries a policy hash."))
+
+    # 8 Refusals
+    B.append(("h2", "8. Decisions and refusals"))
+    rf = data["refusals"]
+    if not rf["evaluated"]:
+        B.append(("p", "Not evaluated: the records failed an earlier check."))
+    else:
+        B.append(("table", ["Decision", "Count"], [[k, str(v)] for k, v in sorted(rf["decisions"].items())]))
+        if rf["by_class"]:
+            B.append(("h3", "Refusals and errors by reason"))
+            B.append(("table", ["Reason class", "Count"], [[k, str(v)] for k, v in sorted(rf["by_class"].items())]))
+            rows_t = sorted(rf["by_tool"].items(), key=lambda kv: (-kv[1], kv[0]))
+            B.append(("table", ["Tool", "Refusals or errors"], [[k, str(v)] for k, v in rows_t[:data["max_rows"]]]))
+            if len(rows_t) > data["max_rows"]:
+                B.append(("p", f"({len(rows_t) - data['max_rows']} more tool(s) not shown; counts above are complete.)"))
+            rows_a = sorted(rf["by_agent"].items(), key=lambda kv: (-kv[1], kv[0]))
+            B.append(("table", ["Agent", "Refusals or errors"], [[k, str(v)] for k, v in rows_a[:data["max_rows"]]]))
+
+    # 9 A2A
+    B.append(("h2", "9. Agent-to-agent messages"))
+    a = data["a2a"]
+    if not a.get("given"):
+        recs = a.get("a2a_records_in_this_ledger") or {}
+        B.append(("p", "Not examined: no peer ledgers were given, so messages could not be matched against the other "
+                       "side. " + (("This ledger holds: " + ", ".join(f"{k}={v}" for k, v in sorted(recs.items())) + ".")
+                                   if recs else "This ledger holds no agent-to-agent records.")))
+    elif not a.get("evaluated"):
+        B.append(("p", "Not evaluated: the records failed an earlier check."))
+    else:
+        B.append(("p", f"Status {a['status']}: {a['detail']}"))
+        if a["findings"]:
+            fr = [[f["type"], f.get("agent_id") or "", f.get("peer") or "", str(f.get("seq")), f.get("ledger", "")]
+                  for f in a["findings"]]
+            B.append(("table", ["Finding", "Agent", "Peer", "Seq", "Ledger"], fr))
+            if a.get("findings_hidden"):
+                B.append(("p", f"({a['findings_hidden']} more finding(s) not shown.)"))
+
+    # fixed section
+    F: list = []
+    F.append(("h2", "10. What this report does not prove"))
+    F.append(("p", "This section is fixed. It is printed in every format and under every option."))
+    F.append(("ul", list(LIMITS_FLOOR)))
+    sha, items = _limits()
+    groups: dict[str, list[str]] = {}
+    for group, lead in items:
+        groups.setdefault(group, []).append(lead)
+    for group, leads in groups.items():
+        F.append(("h3", group))
+        F.append(("ul", leads))
+    F.append(("p", f"Source of the list above: SECURITY.md (sha256 {sha}). Read it for the conditions attached to "
+                   "each statement. The lines above are quotations; words in them about certification or "
+                   "compliance appear only in negations."))
+    return B, F
+
+
+# --------------------------------------------------------------------------------------------- renderers
+def _md_text(s: str) -> str:
+    return html.escape(str(s), quote=False)
+
+
+def _md_cell(s: str) -> str:
+    return _md_text(s).replace("|", "\\|").replace("\n", " ")
+
+
+def render_md(data: dict) -> str:
+    B, F = _doc(data)
+    out: list[str] = []
+    for blk in B + F:
+        t = blk[0]
+        if t == "h1":
+            out.append(f"# {_md_text(blk[1])}\n")
+        elif t == "h2":
+            out.append(f"\n## {_md_text(blk[1])}\n")
+        elif t == "h3":
+            out.append(f"\n### {_md_text(blk[1])}\n")
+        elif t == "p":
+            if blk[1]:
+                out.append(f"{_md_text(blk[1])}\n")
+        elif t == "ul":
+            out.extend(f"- {_md_text(i)}" for i in blk[1])
+            out.append("")
+        elif t == "table":
+            out.append("| " + " | ".join(_md_cell(h) for h in blk[1]) + " |")
+            out.append("|" + "|".join("---" for _ in blk[1]) + "|")
+            out.extend("| " + " | ".join(_md_cell(c) for c in row) + " |" for row in blk[2])
+            out.append("")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+_CSS = ("body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;"
+        "line-height:1.5;color:#1a1a1a;background:#fff}table{border-collapse:collapse;margin:.5rem 0 1rem;width:100%}"
+        "th,td{border:1px solid #bbb;padding:.3rem .5rem;text-align:left;vertical-align:top;font-size:.9rem;"
+        "overflow-wrap:anywhere}th{background:#f0f0f0}h2{border-bottom:1px solid #ccc;padding-bottom:.2rem}"
+        "@media (prefers-color-scheme:dark){body{background:#161616;color:#e8e8e8}th{background:#262626}"
+        "th,td{border-color:#555}h2{border-color:#555}}")
+
+
+def render_html(data: dict) -> str:
+    B, F = _doc(data)
+    e = lambda s: html.escape(str(s), quote=True)  # noqa: E731
+    parts = ["<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
+             '<meta name="viewport" content="width=device-width,initial-scale=1">',
+             "<title>auditrail verification report</title>", f"<style>{_CSS}</style></head><body>"]
+    for blk in B + F:
+        t = blk[0]
+        if t in ("h1", "h2", "h3"):
+            parts.append(f"<{t}>{e(blk[1])}</{t}>")
+        elif t == "p":
+            if blk[1]:
+                parts.append(f"<p>{e(blk[1])}</p>")
+        elif t == "ul":
+            parts.append("<ul>" + "".join(f"<li>{e(i)}</li>" for i in blk[1]) + "</ul>")
+        elif t == "table":
+            parts.append("<table><thead><tr>" + "".join(f"<th>{e(h)}</th>" for h in blk[1]) + "</tr></thead><tbody>")
+            parts.extend("<tr>" + "".join(f"<td>{e(c)}</td>" for c in row) + "</tr>" for row in blk[2])
+            parts.append("</tbody></table>")
+    parts.append("</body></html>")
+    return "\n".join(parts) + "\n"
+
+
+def render_json(data: dict) -> str:
+    B, F = _doc(data)
+    sha, items = _limits()
+    payload = dict(data)
+    payload["does_not_prove"] = {"heading": "What this report does not prove", "floor": list(LIMITS_FLOOR),
+                                 "from_security_md": [{"group": g, "statement": s} for g, s in items],
+                                 "security_md_sha256": sha}
+    payload["status_explanations"] = {s: explain(s) for s in sorted(STATUS_TABLE)}
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
+
+
+def limits_section_start_marker() -> str:
+    return "## 10. What this report does not prove"
