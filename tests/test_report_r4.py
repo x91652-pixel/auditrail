@@ -1,0 +1,144 @@
+"""T-036 R-4: `auditrail report` failures are one-line errors with exit 2, and nothing partial is left behind."""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from auditrail import Ledger, Signer
+
+ROOT = Path(__file__).resolve().parents[1]
+SEED = bytes(range(32))
+
+
+@pytest.fixture
+def env(tmp_path):
+    signer = Signer.from_seed(SEED)
+    led = Ledger(tmp_path / "l.jsonl", signer=signer, fsync=False)
+    for i in range(2):
+        led.record(agent_id="a", session_id="s", policy_version="p", policy_hash="ab" * 32, tool="x",
+                   categories=["c"], args={"i": i}, decision="allow")
+    (tmp_path / "k.pub").write_text(signer.public_hex + "\n", encoding="utf-8")
+    return tmp_path
+
+
+def run(*argv, cwd=None):
+    r = subprocess.run([sys.executable, "-m", "auditrail.cli", "report", *map(str, argv)], cwd=cwd or ROOT,
+                       capture_output=True, timeout=120)
+    return r.returncode, r.stdout, r.stderr.decode("utf-8", "replace")
+
+
+def one_line_error(err):
+    lines = [x for x in err.splitlines() if x.strip()]
+    assert len(lines) == 1, err
+    assert lines[0].startswith("[ERROR]")
+    assert "Traceback" not in err
+
+
+def test_out_is_a_directory(env):
+    (env / "d").mkdir()
+    code, out, err = run(env / "l.jsonl", "--out", env / "d")
+    assert code == 2 and out == b""
+    one_line_error(err)
+
+
+def test_out_parent_is_a_file(env):
+    code, out, err = run(env / "l.jsonl", "--out", env / "k.pub" / "r.md")
+    assert code == 2
+    one_line_error(err)
+
+
+def test_out_parent_does_not_exist_is_not_created(env):
+    code, out, err = run(env / "l.jsonl", "--out", env / "nope" / "r.md")
+    assert code == 2 and not (env / "nope").exists()
+    one_line_error(err)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="read-only directories are not enforced the same way on Windows")
+def test_out_in_a_read_only_directory(env):
+    d = env / "ro"
+    d.mkdir()
+    d.chmod(0o500)
+    try:
+        if os.access(d, os.W_OK):
+            pytest.skip("running with rights that ignore directory permissions")
+        code, out, err = run(env / "l.jsonl", "--out", d / "r.md")
+        assert code == 2
+        one_line_error(err)
+    finally:
+        d.chmod(0o700)
+
+
+def test_format_all_writes_nothing_when_one_target_is_unusable(env):
+    (env / "r.html").mkdir()
+    code, out, err = run(env / "l.jsonl", "--format", "all", "--out", env / "r")
+    assert code == 2
+    one_line_error(err)
+    assert not (env / "r.md").exists() and not (env / "r.json").exists()
+
+
+def test_existing_out_is_refused_without_force_and_replaced_with_it(env):
+    target = env / "r.md"
+    target.write_text("old", encoding="utf-8")
+    code, out, err = run(env / "l.jsonl", "--out", target)
+    assert code == 2 and target.read_text(encoding="utf-8") == "old"
+    one_line_error(err)
+    assert "--force" in err
+    code, out, err = run(env / "l.jsonl", "--out", target, "--force")
+    assert code in (0, 1) and target.read_text(encoding="utf-8").startswith("# auditrail verification report")
+    assert "replaced the existing file" in out.decode("utf-8")
+
+
+def test_out_may_never_be_an_input_even_with_force(env):
+    before = (env / "l.jsonl").read_bytes()
+    code, out, err = run(env / "l.jsonl", "--out", env / "l.jsonl", "--force")
+    assert code == 2 and (env / "l.jsonl").read_bytes() == before
+    one_line_error(err)
+
+
+@pytest.mark.parametrize("flag,value", [("--max-gap", "0"), ("--max-gap", "-5"), ("--max-rows", "0"),
+                                        ("--max-rows", "-1"), ("--max-rows", "abc"), ("--max-gap", "1.5")])
+def test_non_positive_or_non_integer_limits_are_exit_2(env, flag, value):
+    code, out, err = run(env / "l.jsonl", flag, value)
+    assert code == 2 and out == b""
+    assert "Traceback" not in err
+
+
+def test_missing_input_and_bad_generated_at_are_exit_2_not_1(env):
+    assert run(env / "nope.jsonl")[0] == 2
+    assert run(env / "l.jsonl", "--generated-at", "yesterday")[0] == 2
+
+
+def test_stdout_is_the_same_bytes_as_a_file_with_lf_only(env):
+    code, out, err = run(env / "l.jsonl", "--pubkey", env / "k.pub")
+    assert code in (0, 1)
+    assert b"\r\n" not in out
+    code2, _, _ = run(env / "l.jsonl", "--pubkey", env / "k.pub", "--out", env / "o.md")
+    assert code2 == code
+    assert (env / "o.md").read_bytes() == out
+
+
+def test_stdout_is_utf8_even_when_the_console_encoding_is_not(env):
+    e = {**os.environ, "PYTHONIOENCODING": "ascii", "PYTHONUTF8": "0"}
+    r = subprocess.run([sys.executable, "-m", "auditrail.cli", "report", str(env / "l.jsonl"), "--title", "中文"],
+                       cwd=ROOT, capture_output=True, env=e, timeout=120)
+    assert r.returncode in (0, 1), r.stderr
+    assert "中文".encode("utf-8") in r.stdout
+    assert b"Traceback" not in r.stderr
+
+
+def test_a_read_only_existing_file_with_force_is_a_one_line_error(env):
+    import stat
+
+    target = env / "ro.md"
+    target.write_text("old", encoding="utf-8")
+    target.chmod(stat.S_IREAD)
+    try:
+        if os.access(target, os.W_OK):
+            pytest.skip("running with rights that ignore file permissions")
+        code, out, err = run(env / "l.jsonl", "--out", target, "--force")
+        assert code == 2 and target.read_text(encoding="utf-8") == "old"
+        one_line_error(err)
+    finally:
+        target.chmod(stat.S_IWRITE | stat.S_IREAD)

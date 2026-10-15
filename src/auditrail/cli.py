@@ -182,6 +182,11 @@ def cmd_report(args: argparse.Namespace) -> int:
     if args.redact_salt is not None and not args.redact:
         print("[ERROR] --redact-salt only has an effect together with --redact (no report was produced)", file=sys.stderr)
         return 2
+    for name in ("max_gap", "max_rows"):
+        v = getattr(args, name)
+        if v is not None and v < 1:
+            print(f"[ERROR] --{name.replace('_', '-')} must be a positive integer (no report was produced)", file=sys.stderr)
+            return 2
     stamp = None
     if args.generated_at:
         if args.generated_at == "now":
@@ -213,13 +218,61 @@ def cmd_report(args: argparse.Namespace) -> int:
         if len(formats) != 1:
             print("[ERROR] --format all needs --out PREFIX (it writes PREFIX.md, PREFIX.html, PREFIX.json)", file=sys.stderr)
             return 2
-        sys.stdout.write(outputs[formats[0]](data))
-    else:
-        for f in formats:
-            path = Path(args.out + "." + f) if args.format == "all" else Path(args.out)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(outputs[f](data), encoding="utf-8", newline="\n")
-            print(f"[REPORT] wrote {path}")
+    # Everything is rendered and encoded, and every target checked, before anything is written: a failure leaves
+    # no partial report and exits 2 with one line.
+    try:
+        payload = {f: outputs[f](data).encode("utf-8") for f in formats}
+    except (UnicodeError, ValueError) as exc:
+        print(f"[ERROR] the report cannot be encoded as UTF-8: {exc} (no report was produced)", file=sys.stderr)
+        return 2
+    if args.out in (None, "-"):
+        # Bytes, not text mode: the same bytes on every platform (text mode would turn LF into CRLF on Windows).
+        raw = payload[formats[0]]
+        try:
+            out = getattr(sys.stdout, "buffer", None)
+            if out is not None:
+                out.write(raw)
+                out.flush()
+            else:
+                sys.stdout.write(raw.decode("utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"[ERROR] cannot write the report to standard output: {exc}", file=sys.stderr)
+            return 2
+        return 0 if data["overall"]["status"] == "OK" else 1
+    targets = {f: Path(args.out + "." + f) if args.format == "all" else Path(args.out) for f in formats}
+    inputs = {Path(p).resolve() for p in [args.ledger_path, *(args.pubkey or []), args.anchors, args.witness_file,
+                                          *(args.peer_ledger or [])] if p}
+    for f, path in targets.items():
+        if path.resolve() in inputs:
+            print(f"[ERROR] {path}: is one of the input files; the evidence is never overwritten "
+                  "(no report was produced)", file=sys.stderr)
+            return 2
+        if path.is_dir():
+            print(f"[ERROR] {path}: is a directory (no report was produced)", file=sys.stderr)
+            return 2
+        if not path.parent.is_dir():
+            print(f"[ERROR] {path}: the parent directory does not exist or is not a directory "
+                  "(no report was produced)", file=sys.stderr)
+            return 2
+        if path.exists() and not args.force:
+            print(f"[ERROR] {path}: already exists; add --force to replace it (no report was produced)", file=sys.stderr)
+            return 2
+    written: list[tuple[Path, bool]] = []
+    try:
+        for f, path in targets.items():
+            existed = path.exists()
+            path.write_bytes(payload[f])
+            written.append((path, existed))
+            print(f"[REPORT] wrote {path}" + (" (replaced the existing file)" if existed else ""))
+    except OSError as exc:
+        for path, existed in written:
+            if not existed:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        print(f"[ERROR] cannot write the report: {exc}", file=sys.stderr)
+        return 2
     return 0 if data["overall"]["status"] == "OK" else 1
 
 
@@ -300,6 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
                        "(not secret: a guessable name can be recovered; see --redact-salt).")
     p_rep.add_argument("--redact-salt", help="With --redact: a secret mixed into the codes, so guessing a name needs "
                        "the salt. The salt is never printed. Without it the codes are unsalted and the report says so.")
+    p_rep.add_argument("--force", action="store_true", help="Replace an existing --out file (otherwise refused).")
     p_rep.add_argument("--max-rows", type=int, help="Rows shown in long lists (counts are always complete).")
     p_rep.set_defaults(func=cmd_report)
 
