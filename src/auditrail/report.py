@@ -155,6 +155,11 @@ REASON_CLASSES = (
 )
 
 
+def is_clean(data: dict) -> bool:
+    """True when the main ledger's status is OK and no sub-check on another party's ledger came out unclean."""
+    return data["overall"]["status"] == "OK" and not data["overall"].get("secondary")
+
+
 def explain(status: str) -> dict[str, str]:
     return STATUS_TABLE.get(status) or UNKNOWN_STATUS
 
@@ -401,6 +406,12 @@ def build_report(
         a2a["a2a_records_in_this_ledger"] = {k: v for k, v in (data["scope"] or {}).get("kinds", {}).items()
                                               if k.startswith("a2a")}
     data["a2a"] = a2a
+    # Sub-checks on another party's ledger are listed beside the main status, never merged into it.
+    secondary = []
+    if a2a.get("given") and a2a.get("evaluated") and a2a.get("status") != "OK":
+        secondary.append({"check": "agent-to-agent messages and peer ledgers", "status": a2a.get("status"),
+                          "see": "section 9"})
+    data["overall"]["secondary"] = secondary
 
     # --- what ran and what did not, from the outcomes (not from the flags)
     n_records = len(records) if records else 0
@@ -465,10 +476,9 @@ def build_report(
                 desc = "; ".join(
                     f"{pr['records'] if pr['records'] is not None else 'unreadable'} record(s), key id(s) "
                     f"{', '.join(pr['key_ids']) or 'none'}"
-                    + (", same signing key as the ledger: this does not show the other side is independent"
-                       if pr["same_key"] else "") for pr in a2a["peers"])
+                    + (", same signing key as the ledger" if pr["same_key"] else "") for pr in a2a["peers"])
                 ran.append(f"Agent-to-agent messages: {a2a.get('matched') or 0} matched, {n_find} finding(s); "
-                           f"peer ledgers: {desc}.")
+                           f"peer ledgers: {desc}. {INDEPENDENCE}")
             else:
                 nc.append("No agent-to-agent message was compared against another party's record.")
     data["checks_ran"] = ran
@@ -492,6 +502,8 @@ def build_report(
     return data
 
 
+INDEPENDENCE = ("This report cannot confirm that the other side is independent. The same signing key is a clue that "
+                "it is not; a different key does not show that it is.")
 REDACTION_NOT_MASKED = ("policy version strings, timestamps, counts, key ids, policy hashes, message ids, input file "
                         "SHA-256 values and sizes, and any name that does not appear in the records")
 
@@ -602,7 +614,8 @@ def _doc(data: dict) -> tuple[list, list]:
                                       "or can try it." if salted else
                                       "no salt was supplied, so a low-entropy name can be recovered by guessing it and "
                                       "computing the same code.")))
-        B.append(("p", f"Not masked: {REDACTION_NOT_MASKED}. The title and the note above are not masked either."))
+        B.append(("p", f"Not masked: {REDACTION_NOT_MASKED}. Key ids are left visible because they are the identifier "
+                       "you compare with the --pubkey file. The title and the note above are not masked either."))
     B.append(("p", f"Report fingerprint (sha256 of the body, excluding the timestamp line): {data['fingerprint_sha256']}"))
     B.append(("p", f"Generated: {data['generated_at'] or 'not stamped (pass --generated-at to add a timestamp)'}"))
 
@@ -614,6 +627,8 @@ def _doc(data: dict) -> tuple[list, list]:
                        "anything that may have happened."))
     elif o["status"] == "OK" and not data.get("checks_ran"):
         B.append(("p", "No check ran over any record, so no statement is made about them."))
+    elif o["status"] == "OK" and o.get("secondary"):
+        B.append(("p", "The checks on the main ledger found no inconsistency in the records they covered."))
     elif o["status"] == "OK":
         B.append(("p", "The checks listed under 'Checks that ran' found no inconsistency in the records they covered."))
     elif ex["cls"] == "inconclusive":
@@ -622,6 +637,9 @@ def _doc(data: dict) -> tuple[list, list]:
     else:
         at = f" at seq {o['bad_seq']}" if o.get("bad_seq") is not None else ""
         B.append(("p", f"A finding was made: {o['status']}{at} ({ex['label']})."))
+    if o.get("secondary"):
+        B.append(("p", f"The main ledger's result is {o['status']}. A check on another party's ledger did not come out "
+                       "clean: see section 9. The exit code is at least 1 for that reason."))
     B.append(("p", f"Verifier status: {o['status']}. {ex['means']}"))
     if o.get("detail"):
         B.append(("p", f"Verifier's original wording: {o['detail']}"))
@@ -812,8 +830,9 @@ def _doc(data: dict) -> tuple[list, list]:
                            f"record(s), signing key id(s): {', '.join(pr['key_ids']) or 'none'}; signatures "
                            + ("checked against the trusted keys given." if pr["signatures_checked"]
                               else "were not checked (no public key was given).")
-                           + (" Same signing key as the ledger: this does not show the other side is independent."
-                              if pr["same_key"] else "")))
+                           + (" Same signing key as the ledger." if pr["same_key"] else "")))
+        if a.get("peers"):
+            B.append(("p", INDEPENDENCE))
         if a.get("peer_same_as_ledger"):
             B.append(("p", f"{a['peer_same_as_ledger']} peer ledger(s) given have the same content as the ledger itself; "
                            "they were not an independent record of the other side."))

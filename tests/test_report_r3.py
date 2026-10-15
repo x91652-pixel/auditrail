@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from auditrail import Ledger, Signer
+from auditrail import report
 from auditrail.report import build_report, render_html, render_json, render_md
 
 SEED = bytes(range(32))
@@ -181,8 +182,9 @@ def test_c3_peer_keys_and_record_counts_are_printed_and_same_key_is_flagged(env)
     kid = signer.key_id
     assert kid in md.split("## 9.")[1]
     assert "1 record\(s\)" in md.split("## 9.")[1]
-    assert "does not show the other side is independent" in md.split("## 9.")[1]
-    assert "does not show the other side is independent" in ran and kid in ran
+    assert report.INDEPENDENCE in md.split("## 9.")[1].replace("\\", "")
+    assert "The same signing key is a clue that it is not; a different key does not show that it is." in ran
+    assert "same signing key as the ledger" in ran and kid in ran
     nokey = render_md(build_report(w / "a.jsonl", peer_ledgers=[w / "b.jsonl"]))
     assert "Peer ledger signatures were not checked" in nokey
     assert "were not checked \(no public key was given\)" in nokey.split("## 9.")[1]
@@ -212,3 +214,83 @@ def test_c4_no_anchor_given_is_said_directly(env):
     md = render_md(build_report(w / "l.jsonl", public_key_paths=[w / "k.pub"]))
     assert "no anchor was given \(or the file held none\)" in md.split("## 2.")[0]
     assert "or no anchor was given" not in md
+
+
+# --- T-040 P-1: an unclean check on another party's ledger changes the exit code and is on the first screen
+from auditrail.cli import main  # noqa: E402
+
+SENTENCE = ("The main ledger's result is OK. A check on another party's ledger did not come out clean: "
+            "see section 9.")
+
+
+def _pair(w, signer, peer_signer=None):
+    la = Ledger(w / "a.jsonl", signer=signer, fsync=False)
+    la.record_event("a2a_send", agent_id="a", peer="b", msg_id="m1", msg_digest="1" * 64)
+    lb = Ledger(w / "b.jsonl", signer=peer_signer or signer, fsync=False)
+    lb.record_event("a2a_recv", agent_id="b", peer="a", msg_id="m1", msg_digest="1" * 64, status="accepted")
+    return w / "a.jsonl", w / "b.jsonl"
+
+
+def _run_json(capsys, *argv):
+    code = main(["report", "--format", "json", *map(str, argv)])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def _break_peer(kind, w, signer):
+    a, b = _pair(w, signer)
+    if kind == "tampered":
+        recs = [json.loads(x) for x in b.read_text(encoding="utf-8").splitlines()]
+        recs[0]["status"] = "rejected"
+        b.write_text("".join(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n" for r in recs), encoding="utf-8")
+    elif kind == "unknown_key":
+        a, b = _pair(w, signer, Signer.from_seed(bytes(range(1, 33))))
+    elif kind == "unsigned":
+        Ledger(w / "b.jsonl", fsync=False)  # no signer
+        b.unlink()
+        lb = Ledger(b, fsync=False)
+        lb.record_event("a2a_recv", agent_id="b", peer="a", msg_id="m1", msg_digest="1" * 64, status="accepted")
+    elif kind == "bom":
+        b.write_bytes(b"\xef\xbb\xbf" + b.read_bytes())
+    elif kind == "one_sided":
+        lb = Ledger(w / "b.jsonl", signer=signer, fsync=False)  # a second, unmatched receive
+        lb.record_event("a2a_recv", agent_id="b", peer="a", msg_id="m2", msg_digest="2" * 64, status="accepted")
+    return a, b
+
+
+@pytest.mark.parametrize("kind", ["tampered", "unknown_key", "unsigned", "bom", "one_sided"])
+def test_p1_an_unclean_peer_check_is_on_the_first_screen_and_exit_1(env, capsys, kind):
+    w, signer = env
+    a, b = _break_peer(kind, w, signer)
+    clean_main = build_report(a, public_key_paths=[w / "k.pub"])
+    assert clean_main["overall"]["status"] == "OK"
+    code, js = _run_json(capsys, a, "--pubkey", w / "k.pub", "--peer-ledger", b)
+    assert code == 1
+    assert js["overall"]["status"] == "OK", "the main ledger's status is never rewritten"
+    assert js["overall"]["secondary"] and js["overall"]["secondary"][0]["status"] != "OK"
+    md = render_md(build_report(a, public_key_paths=[w / "k.pub"], peer_ledgers=[b]))
+    assert SENTENCE in md.split("## 2.")[0]
+
+
+def test_p1_a_clean_peer_gives_exit_0_and_no_sentence(env, capsys):
+    w, signer = env
+    a, b = _pair(w, signer)
+    code, js = _run_json(capsys, a, "--pubkey", w / "k.pub", "--peer-ledger", b)
+    assert code == 0 and js["overall"]["secondary"] == []
+    md = render_md(build_report(a, public_key_paths=[w / "k.pub"], peer_ledgers=[b]))
+    assert "did not come out clean" not in md
+
+
+def test_p1_a_different_peer_key_still_gets_the_independence_sentence(env):
+    w, signer = env
+    a, b = _pair(w, signer, Signer.from_seed(bytes(range(1, 33))))
+    (w / "k2.pub").write_text(Signer.from_seed(bytes(range(1, 33))).public_hex + "\n", encoding="utf-8")
+    md = render_md(build_report(a, public_key_paths=[w / "k.pub", w / "k2.pub"], peer_ledgers=[b]))
+    sec9 = md.split("## 9.")[1]
+    assert "a different key does not show that it is" in sec9
+    assert "Same signing key as the ledger" not in sec9
+
+
+def test_b_the_redaction_note_gives_the_reason_key_ids_stay_visible(env):
+    w, _ = env
+    md = render_md(build_report(w / "l.jsonl", redact=True))
+    assert "Key ids are left visible because they are the identifier you compare with the --pubkey file" in md

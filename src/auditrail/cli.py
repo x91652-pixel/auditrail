@@ -189,7 +189,7 @@ def _is_input(path: Path, inputs) -> bool:
 
 def cmd_report(args: argparse.Namespace) -> int:
     from . import _strict
-    from .report import DEFAULT_MAX_ROWS, build_report, render_html, render_json, render_md
+    from .report import DEFAULT_MAX_ROWS, build_report, is_clean, render_html, render_json, render_md
 
     ledger = Path(args.ledger_path)
     if not ledger.is_file():
@@ -254,7 +254,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         except (OSError, ValueError) as exc:
             print(f"[ERROR] cannot write the report to standard output: {exc}", file=sys.stderr)
             return 2
-        return 0 if data["overall"]["status"] == "OK" else 1
+        return 0 if is_clean(data) else 1
     targets = {f: Path(args.out + "." + f) if args.format == "all" else Path(args.out) for f in formats}
     inputs = [p for p in [args.ledger_path, *(args.pubkey or []), args.anchors, args.witness_file,
                           *(args.peer_ledger or [])] if p]
@@ -289,7 +289,7 @@ def cmd_report(args: argparse.Namespace) -> int:
                     pass
         print(f"[ERROR] cannot write the report: {exc}", file=sys.stderr)
         return 2
-    return 0 if data["overall"]["status"] == "OK" else 1
+    return 0 if is_clean(data) else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
