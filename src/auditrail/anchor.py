@@ -123,13 +123,16 @@ def _check_anchor_line(rec: Any, public_keys: Optional[dict[str, str]]) -> Optio
         pub = (public_keys or {}).get(rec["key_id"])
         if public_keys is not None and pub is None:
             return "UNKNOWN_KEY", f"anchor is signed by key_id={rec['key_id']}, which is not in the trusted keys"
-        if public_keys is not None and alg not in supported_algorithms():
-            return ("UNSUPPORTED_ALGORITHM",
-                    f"anchor names signature algorithm {alg!r}, which this verifier does not implement, so its "
-                    "signature could not be checked. That may be a newer algorithm, or someone may have changed the "
-                    "field. Inconclusive, not OK; it can be provoked by someone without the key")
         if pub is not None and key_algorithm(public_keys, rec["key_id"]) != alg:
-            return "BAD_SIGNATURE", f"anchor names algorithm {alg!r} but the trusted key is of another type (algorithm mismatch)"
+            # not a signature this key made, whether or not the claimed algorithm is implemented here
+            return ("BAD_SIGNATURE",
+                    f"anchor names signature algorithm {alg!r} but the trusted key is a "
+                    f"{key_algorithm(public_keys, rec['key_id'])!r} key (algorithm mismatch)")
+        if public_keys is not None and alg not in supported_algorithms():
+            # only reachable when the key itself was registered as a type this verifier cannot check
+            return ("UNSUPPORTED_ALGORITHM",
+                    f"anchor is signed with {alg!r}, which this verifier does not implement, so its signature could "
+                    "not be checked. Inconclusive, not OK; it can be provoked by someone without the key")
         if pub is not None and not verify_with(alg, pub, TAG_ANCHOR, rec["anchor_hash"].encode("ascii"), rec.get("sig", "")):
             return "BAD_SIGNATURE", "anchor signature does not verify"
     elif public_keys is not None:

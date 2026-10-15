@@ -138,21 +138,23 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
             if why is not None:
                 return _fail("MALFORMED_RECORD", f"seq={expected}: {why}", bad_seq=expected)
             alg = rec.get("sig_alg", DEFAULT_ALG)
+            key_alg = key_algorithm(public_keys, key_id)
+            if key_alg != alg:
+                # The trusted key is of one type and the record claims another: that is not a signature this key
+                # made, whether or not this verifier implements the claimed algorithm. Definite, not inconclusive.
+                return _fail("BAD_SIGNATURE",
+                             f"seq={expected}: record names signature algorithm {alg!r} but the trusted key {key_id} "
+                             f"is a {key_alg!r} key (algorithm mismatch)", bad_seq=expected)
             if alg not in supported:
+                # only reachable when the key itself was registered as a type this verifier cannot check
                 if deferred is None:
                     deferred = _fail("UNSUPPORTED_ALGORITHM",
-                                     f"seq={expected} names signature algorithm {alg!r}, which this verifier does not "
-                                     "implement, so its signature could not be checked. That may be a newer algorithm, "
-                                     "or someone may have changed the field. Inconclusive, not OK. It can be provoked "
-                                     "by someone without the key, so it does not mean the records were not tampered with",
-                                     bad_seq=expected)
-            else:
-                if key_algorithm(public_keys, key_id) != alg:
-                    return _fail("BAD_SIGNATURE",
-                                 f"seq={expected}: record names algorithm {alg!r} but the trusted key {key_id} is a "
-                                 f"{key_algorithm(public_keys, key_id)!r} key (algorithm mismatch)", bad_seq=expected)
-                if not verify_with(alg, pub, TAG_RECORD, stored.encode("ascii"), sig):
-                    return _fail("BAD_SIGNATURE", f"seq={expected}: signature does not verify", bad_seq=expected)
+                                     f"seq={expected} is signed with {alg!r}, which this verifier does not "
+                                     "implement, so its signature could not be checked. Inconclusive, not OK. "
+                                     "It can be provoked by someone without the key, so it does not mean the "
+                                     "records were not tampered with", bad_seq=expected)
+            elif not verify_with(alg, pub, TAG_RECORD, stored.encode("ascii"), sig):
+                return _fail("BAD_SIGNATURE", f"seq={expected}: signature does not verify", bad_seq=expected)
         problem = _check_fields(rec, expected)
         if problem is not None:
             return problem

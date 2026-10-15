@@ -323,10 +323,12 @@ fn check_anchor_line(rec: &Map<String, Value>, keys: &Option<HashMap<String, [u8
             match map.get(key_id) {
                 None => return Err(("UNKNOWN_KEY".into(), format!("anchor is signed by key_id={key_id}, which is not in the trusted keys"))),
                 Some(p) => {
-                    if !SUPPORTED_ALGS.contains(&alg) {
+                    // every key this verifier is given is an Ed25519 key, so another claimed algorithm is not a
+                    // signature that key made, whether or not the algorithm is implemented here: definite
+                    if alg != DEFAULT_ALG {
                         return Err((
-                            "UNSUPPORTED_ALGORITHM".into(),
-                            format!("anchor names signature algorithm '{alg}', which this verifier does not implement, so its signature could not be checked. That may be a newer algorithm, or someone may have changed the field. Inconclusive, not OK; it can be provoked by someone without the key"),
+                            "BAD_SIGNATURE".into(),
+                            format!("anchor names signature algorithm '{alg}' but the trusted key is an 'ed25519' key (algorithm mismatch)"),
                         ));
                     }
                     if !check_sig(p, TAG_ANCHOR, &anchor_hash, s(rec, "sig").unwrap_or("")) {
@@ -384,7 +386,6 @@ fn check_anchors_file(
     bytes: &[u8],
     ledger: &[Map<String, Value>],
     keys: &Option<HashMap<String, [u8; 32]>>,
-    deferred: &mut Option<Report>,
     unchecked: &mut Vec<String>,
 ) -> Result<Option<i64>, Report> {
     let (lines, problem) = anchor_lines(bytes);
@@ -392,10 +393,8 @@ fn check_anchors_file(
     for (i, a) in lines.iter().enumerate() {
         match check_anchor_line(a, keys) {
             Ok(()) => {}
-            Err((st, d)) if st == "UNSUPPORTED_ALGORITHM" => {
-                // inconclusive: remembered, and the line is still compared with the ledger below
-                deferred.get_or_insert_with(|| Report::fail(&st, format!("anchors file: line {}: {d}", i + 1), None));
-            }
+            // UNSUPPORTED_ALGORITHM cannot occur here: only an Ed25519 key can be given, so any other claimed
+            // algorithm is a mismatch (BAD_SIGNATURE) before it could be "unsupported".
             Err((st, d)) => return Err(Report::fail(&st, format!("anchors file: line {}: {d}", i + 1), None)),
         }
         note_unchecked_alg(a, unchecked);
@@ -420,7 +419,6 @@ fn check_witness(
     bytes: &[u8],
     ledger: &[Map<String, Value>],
     keys: &Option<HashMap<String, [u8; 32]>>,
-    deferred: &mut Option<Report>,
     unchecked: &mut Vec<String>,
 ) -> Result<Option<i64>, Report> {
     let (lines, problem) = anchor_lines(bytes);
@@ -428,9 +426,6 @@ fn check_witness(
     for (i, a) in lines.iter().enumerate() {
         match check_anchor_line(a, keys) {
             Ok(()) => {}
-            Err((st, d)) if st == "UNSUPPORTED_ALGORITHM" => {
-                deferred.get_or_insert_with(|| Report::fail(&st, format!("witness: line {}: {d}", i + 1), None));
-            }
             Err((st, d)) => return Err(Report::fail(&st, format!("witness: line {}: {d}", i + 1), None)),
         }
         note_unchecked_alg(a, unchecked);
@@ -496,14 +491,15 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
                 return bad("MALFORMED_RECORD", format!("seq={i}: {why}"));
             }
             let alg = s(rec, "sig_alg").unwrap_or(DEFAULT_ALG);
-            if !SUPPORTED_ALGS.contains(&alg) {
-                if deferred.is_none() {
-                    deferred = Some(bad(
-                        "UNSUPPORTED_ALGORITHM",
-                        format!("seq={i} names signature algorithm '{alg}', which this verifier does not implement, so its signature could not be checked. That may be a newer algorithm, or someone may have changed the field. Inconclusive, not OK. It can be provoked by someone without the key, so it does not mean the records were not tampered with"),
-                    ));
-                }
-            } else if !check_sig(p, TAG_RECORD, &stored, sig) {
+            if alg != DEFAULT_ALG {
+                // every key given to this verifier is an Ed25519 key: a record claiming another algorithm is not a
+                // signature that key made, whether or not the algorithm is implemented here. Definite.
+                return bad(
+                    "BAD_SIGNATURE",
+                    format!("seq={i}: record names signature algorithm '{alg}' but the trusted key is an 'ed25519' key (algorithm mismatch)"),
+                );
+            }
+            if !check_sig(p, TAG_RECORD, &stored, sig) {
                 return bad("BAD_SIGNATURE", format!("seq={i}: signature does not verify"));
             }
         }
@@ -523,7 +519,7 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
 
     // 3: the owner's anchors file, 4: the witness's copy
     if let Some(bytes) = &opts.anchors {
-        match check_anchors_file(bytes, &records, &opts.public_keys, &mut deferred, &mut anchor_algs) {
+        match check_anchors_file(bytes, &records, &opts.public_keys, &mut anchor_algs) {
             Ok(u) => fold(u),
             Err(mut r) => {
                 r.records = n;
@@ -532,7 +528,7 @@ pub fn verify_bytes(ledger_bytes: &[u8], opts: &Options) -> Report {
         }
     }
     if let Some(bytes) = &opts.witness {
-        match check_witness(bytes, &records, &opts.public_keys, &mut deferred, &mut anchor_algs) {
+        match check_witness(bytes, &records, &opts.public_keys, &mut anchor_algs) {
             Ok(u) => fold(u),
             Err(mut r) => {
                 r.records = n;
