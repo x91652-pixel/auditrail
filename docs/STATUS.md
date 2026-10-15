@@ -258,7 +258,7 @@ SECURITY 與模擬的**不一致處**：沒有行為上的不一致。只有一�
 | `pyproject.toml` / `verifier/Cargo.toml` / `auditrail.__version__` | 0.2.0 | 一致 |
 | README 徽章、Status、標題 | v0.2 | 一致 |
 | **GitHub repo 簡介**（Settings → About） | 「…(v0.1 proof of concept)」 | **不一致**；這是 GitHub 設定，不在 repo 檔案內。已列出修正指令，但沒有執行（對外可見的變更，需要你同意） |
-| `docs/x-announcement.md` | 全文寫 v0.1 | 這是尚未發布的 X 貼文草稿，內容是 v0.1 時的描述；已在檔首加註「草稿反映 v0.1，發布前需依 v0.2 重寫」 |
+| `docs/x-announcement.md` | 已從 repo 刪除 | 這是 v0.1 時代的貼文草稿，含已知不實說法（如與 Certificate Transparency 相同結構）；貼文草稿不放在公開 repo，正本在內部。 |
 | `dashboard/Cargo.toml` | 0.1.0 | 獨立元件，版本號自成一套；不視為錯誤，但需要決定是否與主版本同步 |
 | `examples/logistics_sim/scenarios.py:8,193,345,357` | 文字提到 v0.1 | 多數是在談「v0.1 的攻擊/行為」，語意正確；只有第 193 行過時（見第 4 節） |
 
@@ -287,7 +287,7 @@ gh repo edit x91652-pixel/auditrail --description "Verifiable evidence layer for
 - 新增 `docs/STATUS.md`（本檔）
 - 修改 `README.md`：D1、D2、D3、D4、D6
 - 修改 `ROADMAP.md`：D5
-- 修改 `docs/x-announcement.md`：檔首加註
+- `docs/x-announcement.md`：已刪除（見第 5 節表格）
 
 沒有修改任何 `.py`、`.rs`、`.toml`、`.yml`。
 

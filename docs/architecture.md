@@ -41,13 +41,11 @@ all check out.
 ## Why "categories," not "tools," drive the policy decision
 
 A naive allow-list ("agent X may call tools A, B, C") says nothing about
-*combinations*. The incidents this project is modeling on
-(EchoLeak, Slack AI's indirect prompt injection, ForcedLeak in Salesforce
-Agentforce, the GitHub MCP private-repo exfiltration disclosure) all have
-the same shape: a single session ends up with (1) access to private data,
-(2) exposure to attacker-influenceable content, and (3) a way to send
-data out -- and any *one* of those three tools looked individually
-harmless in isolation. `policy.py` tracks categories per session and
+*combinations*. The design follows Simon Willison's "lethal trifecta":
+a single session that holds (1) access to private data, (2) exposure to
+attacker-influenceable content, and (3) a way to send data out. The
+incidents in the README describe agents in that position (each with its
+source and the conditions it needed). `policy.py` tracks categories per session and
 refuses to complete that trio, regardless of which specific tool would be
 the third leg.
 

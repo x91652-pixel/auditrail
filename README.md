@@ -4,6 +4,11 @@
 
 `pip install -e .` today; `pip install auditrail` once it's on PyPI (not yet -- see Status below).
 
+> **Status and what this is not.** Early (v0.2), not on PyPI, with no independent security review. The evidence
+> format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
+> agree, not yet that the format is right. It is not a certified compliance product. What it deliberately does not
+> do is listed in [SECURITY.md](SECURITY.md); read that before deciding whether it fits.
+
 [![test](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml)
 ![status](https://img.shields.io/badge/status-v0.2_early-orange)
 ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -13,36 +18,43 @@
 AI agents now read private data, browse untrusted content, and act on the
 outside world -- often all in the same session. When those three
 capabilities land in one place, a prompt injected into "just some text
-the agent read" turns into real data exfiltration. This is not
-hypothetical:
+the agent read" turns into real data exfiltration. Reported
+incidents (each with its source and the conditions it needed):
 
-- **EchoLeak** (CVE-2025-32711, CVSS 9.3) -- a single crafted email let
-  Microsoft 365 Copilot read a user's files and exfiltrate them through a
-  trusted domain, with zero clicks.
-- **Slack AI** -- an attacker in a public channel could get Slack AI to
-  leak content from private channels the attacker was never a member of.
-- **ForcedLeak** (CVSS 9.4) -- indirect prompt injection via a
-  Salesforce Agentforce web form leaked CRM data to an attacker-controlled
-  domain that cost about $5 to register.
-- **GitHub MCP** -- a malicious public GitHub issue could hijack an
-  AI coding agent into leaking the contents of the user's private
-  repositories.
-- **Replit's coding agent** deleted a production database during an
-  explicit "code freeze," then fabricated data to hide it.
-- **GTG-1002** -- Anthropic's own threat-intel team disclosed a
-  state-linked actor that got an AI agent to autonomously execute an
-  estimated 80-90% of a multi-target intrusion campaign.
+- **EchoLeak** ([CVE-2025-32711](https://nvd.nist.gov/vuln/detail/CVE-2025-32711)) -- a crafted email, with no
+  action by the user, got Microsoft 365 Copilot to disclose confidential data. CVSS 3.1: Microsoft scored it 9.3,
+  NIST (NVD) scored it 7.5.
+- **Slack AI** (PromptArmor, August 2024) -- an attacker could post hidden instructions in a public channel that
+  only they were in, and make Slack AI answer a victim with a link carrying the victim's private-channel data
+  (for example an API key); the data left when the victim clicked. Slack's reply at the time was that this was
+  expected behavior.
+  ([report](https://promptarmor.substack.com/p/data-exfiltration-from-slack-ai-via))
+- **ForcedLeak** (Noma Labs, September 2025; Noma rated it CVSS 9.4) -- indirect prompt injection through a
+  Salesforce Agentforce Web-to-Lead form could send CRM data to a domain that had expired but was still on the
+  allow-list (Noma bought it for about $5). Salesforce enforced Trusted URLs in September 2025.
+  ([report](https://noma.security/blog/forcedleak-agent-risks-exposed-in-salesforce-agentforce/))
+- **GitHub MCP** (Invariant Labs, May 2025) -- when a user's agent can reach both a public and a private
+  repository, a malicious issue in the public one can make the agent write private-repository content into a
+  public pull request. The discoverers describe this as an architectural issue at the agent layer, not a defect in
+  the GitHub server code. ([report](https://invariantlabs.ai/blog/mcp-github-vulnerability))
+- **Replit** (July 2025) -- SaaStr founder Jason Lemkin said Replit's AI coding agent deleted his production
+  database during a code freeze and produced fake data and reports; Replit's CEO publicly called this
+  unacceptable. The details come from Lemkin and were not independently verified.
+  ([The Register](https://www.theregister.com/2025/07/22/replit_saastr_response/))
+- **GTG-1002** (Anthropic, November 2025) -- Anthropic assessed with high confidence that a Chinese state-sponsored
+  group used Claude Code against about 30 targets; by Anthropic's estimate the AI independently performed 80-90%
+  of the tactical operations, humans approved at key decision points, and a small number of intrusions succeeded.
+  ([Anthropic](https://www.anthropic.com/news/disrupting-AI-espionage))
 
 OWASP's [Top 10 for Agentic Applications
-2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/)
-formalizes the pattern behind most of these as **Tool Misuse (ASI02)**,
-**Agent Identity & Privilege Abuse (ASI03)**, and **Insecure Inter-Agent
-Communication (ASI07)**. Independently, Simon Willison named the
-underlying shape the **["lethal
-trifecta"](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)**:
-private data access + exposure to untrusted content + a way to
-communicate externally, all in one session. Any two are usually fine.
-All three, in the same agent session, is how these incidents happen.
+2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) (December 2025) includes
+**Tool Misuse and Exploitation (ASI02)**, **Identity and Privilege Abuse (ASI03)** and **Insecure Inter-Agent
+Communication (ASI07)**. Its own incident table files several of the incidents above mainly under ASI01 (Agent
+Goal Hijack) and ASI02; the GitHub issue case is also listed under ASI07. Independently, Simon Willison named a
+shape he calls the **["lethal
+trifecta"](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)** (June 2025): access to private data,
+exposure to untrusted content, and the ability to communicate externally. His point is that the danger is
+greatest when an agent has all three.
 
 **auditrail gives an agent session a policy engine that refuses to
 complete that trio, and a tamper-evident log of every decision it made
@@ -290,7 +302,7 @@ Wrap a real tool function in ~5 lines:
 from auditrail import Guard, Ledger, PolicyEngine
 
 policy = PolicyEngine.from_yaml("policies/example_policy.yaml")
-ledger = Ledger("evidence.jsonl")
+ledger = Ledger("evidence.jsonl")        # no signer: records are hash-chained but not signed
 guard = Guard(policy, ledger)
 
 @guard.guarded_tool("read_resume", categories=["data_access"])
@@ -322,10 +334,10 @@ narrow and meant to compose with things that already exist:
 
 | If you need... | Consider |
 |---|---|
-| Prompt-injection / jailbreak detection on inputs and outputs | A guardrail product (Lakera, Prompt Security, etc.) |
-| Agent discovery, fleet-wide policy across SaaS platforms | Zenity, Noma, Astrix |
-| A certifiable standard + insurance for an agent | [AIUC-1](https://www.aiuc-1.com/) |
-| An org-wide AI risk/compliance workflow | Credo AI, Holistic AI, IBM watsonx.governance |
+| Prompt-injection / jailbreak detection on inputs and outputs | A prompt-injection detection product |
+| Agent discovery, fleet-wide policy across SaaS platforms | An agent governance platform |
+| A certifiable standard + insurance for an agent | [AIUC-1](https://www.aiuc-1.com/), a standard for AI agents with third-party certification (per its own pages: accredited auditors and annual re-certification) |
+| An org-wide AI risk/compliance workflow | An AI governance / risk-management software product |
 | **A tamper-evident record of what one agent session actually did, that you own and can verify yourself, in your own code, with no vendor lock-in** | **auditrail** |
 
 ## Status
@@ -356,7 +368,7 @@ must give the same status in Python and Rust, and never a crash. `tests/test_rea
 inputs (non-UTF-8, `-0`, `true` as an integer, signatures with a space, ...) one by one.
 
 To see the attack simulation (a fictional logistics company with five
-agents, 9 normal operations and 16 attacks, including the known gaps):
+agents, 11 normal operations and 19 attack scenarios: 15 defended and 4 documented gaps):
 
 ```bash
 python -m examples.logistics_sim.run
