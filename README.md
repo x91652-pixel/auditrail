@@ -114,7 +114,7 @@ replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by ev
   check.
 - **Behavior change:** the same tool labelled differently by two agent sections raises `PolicyError` when it is
   wrapped; give it one label set.
-- **Behavior change (verifiers, Python and Rust):** two new statuses, `UNSUPPORTED_ALGORITHM` (a record or anchor names a signature algorithm the verifier does not implement; not `OK`, not tampering) and `UNSUPPORTED_FORMAT` (`format` is an integer other than 2). An optional `sig_alg` member names the algorithm; absent means Ed25519 and Ed25519 is always written by omission, so existing ledgers are unchanged. An explicit `"sig_alg":"ed25519"` is rejected. See [the format spec](docs/spec/evidence-format-v2.md).
+- **Behavior change (verifiers, Python and Rust):** two new statuses, `UNSUPPORTED_ALGORITHM` (a record or anchor names a signature algorithm the verifier does not implement; a failure, exit 1, *inconclusive*: someone without the key can cause it, so it never means "untouched"; definite findings outrank it) and `UNSUPPORTED_FORMAT` (`format` is an integer other than 2). An optional `sig_alg` member names the algorithm; absent means Ed25519 and Ed25519 is always written by omission, so existing ledgers are unchanged. An explicit `"sig_alg":"ed25519"` is rejected. See [the format spec](docs/spec/evidence-format-v2.md).
 
 These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
 see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
