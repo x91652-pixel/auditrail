@@ -171,6 +171,22 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return run_demo()
 
 
+def _is_input(path: Path, inputs) -> bool:
+    """True if `path` names the same file as any input: the same path after resolving, or the same device and inode
+    (a hard link, a junction, a short or differently cased name all reach the same file)."""
+    import os
+
+    for q in inputs:
+        try:
+            if os.path.samefile(path, q):
+                return True
+        except OSError:
+            pass
+        if os.path.normcase(os.path.realpath(path)) == os.path.normcase(os.path.realpath(q)):
+            return True
+    return False
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     from . import _strict
     from .report import DEFAULT_MAX_ROWS, build_report, render_html, render_json, render_md
@@ -240,12 +256,12 @@ def cmd_report(args: argparse.Namespace) -> int:
             return 2
         return 0 if data["overall"]["status"] == "OK" else 1
     targets = {f: Path(args.out + "." + f) if args.format == "all" else Path(args.out) for f in formats}
-    inputs = {Path(p).resolve() for p in [args.ledger_path, *(args.pubkey or []), args.anchors, args.witness_file,
-                                          *(args.peer_ledger or [])] if p}
+    inputs = [p for p in [args.ledger_path, *(args.pubkey or []), args.anchors, args.witness_file,
+                          *(args.peer_ledger or [])] if p]
     for f, path in targets.items():
-        if path.resolve() in inputs:
-            print(f"[ERROR] {path}: is one of the input files; the evidence is never overwritten "
-                  "(no report was produced)", file=sys.stderr)
+        if _is_input(path, inputs):
+            print(f"[ERROR] {path}: is one of the input files (or another name for it); the evidence is never "
+                  "overwritten (no report was produced)", file=sys.stderr)
             return 2
         if path.is_dir():
             print(f"[ERROR] {path}: is a directory (no report was produced)", file=sys.stderr)

@@ -142,3 +142,73 @@ def test_a_read_only_existing_file_with_force_is_a_one_line_error(env):
         one_line_error(err)
     finally:
         target.chmod(stat.S_IWRITE | stat.S_IREAD)
+
+
+# --- T-038 C-1: another name for an input is still the input
+def _sha(p):
+    import hashlib
+
+    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("input_role", ["ledger", "pubkey", "witness", "peer"])
+def test_c1_no_alias_of_an_input_is_overwritten_even_with_force(env, input_role):
+    victim = {"ledger": "l.jsonl", "pubkey": "k.pub", "witness": "w.jsonl", "peer": "p.jsonl"}[input_role]
+    if victim in ("w.jsonl", "p.jsonl"):
+        (env / victim).write_bytes((env / "l.jsonl").read_bytes())
+    extra = {"ledger": [], "pubkey": ["--pubkey", env / "k.pub"], "witness": ["--witness-file", env / "w.jsonl"],
+             "peer": ["--peer-ledger", env / "p.jsonl"]}[input_role]
+    tmp_link = env / ("hard_" + victim)
+    cases = {}
+    try:
+        os.link(env / victim, tmp_link)
+        cases["hardlink"] = tmp_link
+    except OSError:
+        pass
+    cases["same path, another spelling"] = env / "." / victim
+    if os.name == "nt":
+        cases["case variant"] = env / victim.upper()
+        cases["extended prefix"] = Path("\\?\\" + str(env / victim))
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(520)
+        if ctypes.windll.kernel32.GetShortPathNameW(str(env / victim), buf, 520) and buf.value:
+            cases["8.3 short name"] = Path(buf.value)
+    assert cases
+    before = _sha(env / victim)
+    for label, alias in cases.items():
+        code, out, err = run(env / "l.jsonl", *extra, "--out", alias, "--force")
+        assert code == 2, (label, err)
+        assert _sha(env / victim) == before, label
+        one_line_error(err)
+
+
+def test_c1_symlink_to_the_ledger(env):
+    try:
+        os.symlink(env / "l.jsonl", env / "sym.md")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links are not available to this account")
+    before = _sha(env / "l.jsonl")
+    code, out, err = run(env / "l.jsonl", "--out", env / "sym.md", "--force")
+    assert code == 2 and _sha(env / "l.jsonl") == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="junctions are a Windows feature")
+def test_c1_a_junction_directory_to_the_input_folder(env):
+    (env / "sub").mkdir()
+    (env / "sub" / "a.jsonl").write_bytes((env / "l.jsonl").read_bytes())
+    r = subprocess.run(["cmd", "/c", "mklink", "/J", str(env / "jn"), str(env / "sub")], capture_output=True)
+    if r.returncode != 0:
+        pytest.skip("cannot create a junction")
+    before = _sha(env / "sub" / "a.jsonl")
+    code, out, err = run(env / "sub" / "a.jsonl", "--out", env / "jn" / "a.jsonl", "--force")
+    assert code == 2 and _sha(env / "sub" / "a.jsonl") == before
+
+
+def test_c1_format_all_targets_are_each_checked_against_the_inputs(env):
+    # PREFIX.json is the input ledger's own name: the ledger must not be replaced by the JSON report.
+    (env / "r.json").write_bytes((env / "l.jsonl").read_bytes())
+    before = _sha(env / "r.json")
+    code, out, err = run(env / "r.json", "--format", "all", "--out", env / "r", "--force")
+    assert code == 2 and _sha(env / "r.json") == before
+    assert not (env / "r.md").exists() and not (env / "r.html").exists()
