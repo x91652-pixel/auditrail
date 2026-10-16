@@ -7,11 +7,13 @@ Not on PyPI yet: to try it, follow the [Quickstart](#quickstart).
 > **In plain words.** An AI agent can read private data, read text from untrusted places, and send things out. When all
 > three happen in one session (the "lethal trifecta"), a trick hidden in the text can make it leak the data. auditrail
 > is a small library that can refuse a tool call that would complete that combination, and that writes each decision
-> to a log in which every entry is chained to the one before it (changing an old entry breaks every later one) and
-> signed by a separate *recorder*, so someone who does not trust you can later check the log with only a public key.
-> A *witness* is a place outside the operator's control that keeps a copy of the log's latest fingerprint (an
-> *anchor*); a *heartbeat* is a periodic entry in which the recorder says which tools it wraps. It covers only the
-> tools you wrapped, does not detect prompt injection, and is not a compliance product.
+> to a log in which every entry is chained to the one before it (changing an old entry breaks the chain unless every later
+> entry is recomputed, which is why entries are also signed) and signed by a separate *recorder*. Someone who does not
+> trust you can then check, with the recorder's public key obtained from a route you cannot change, that entries were
+> not edited; noticing that entries were deleted or the log cut short needs a witness copy. A *witness* is a place
+> outside the operator's control that keeps copies of the log's fingerprints (*anchors*), published periodically; a
+> *heartbeat* is a periodic entry in which the recorder says which tools it wraps and how many calls it saw versus
+> recorded, so silent gaps show up. It covers only the tools you wrapped, does not detect prompt injection, and is not a compliance product.
 
 > **Status and what this is not.** Early (v0.2), not on PyPI, with no independent security review. The evidence
 > format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
@@ -46,6 +48,7 @@ incidents of that kind (each with its source; preconditions are given where the 
   repository, a malicious issue in the public one can make the agent write private-repository content into a
   public pull request. The discoverers describe this as an architectural issue at the agent layer, not a defect in
   the GitHub server code. ([report](https://invariantlabs.ai/blog/mcp-github-vulnerability))
+
 Reported incidents that are not prompt-injection exfiltration (each with its source):
 
 - **Replit** (July 2025) -- SaaStr founder Jason Lemkin said Replit's AI coding agent deleted his production
@@ -72,7 +75,7 @@ combines all three can be tricked into leaking private data.
 **auditrail gives an agent session a policy engine that refuses to
 complete that trio, and a tamper-evident log of every decision it made
 along the way** -- so that afterwards you can check which calls to
-wrapped tools were allowed or refused and why, and whether that record has been altered since (given a signing
+wrapped tools were allowed or refused (with the reason, for a refusal), and whether that record has been altered since (given a signing
 key the operator cannot reach and a witness copy it does not control). The ledger stores digests of arguments and
 results, not what the agent "saw".
 
@@ -85,10 +88,11 @@ already use.
 
 - **Signed, hash-chained ledger.** Every record is chained to the previous one
   and signed (Ed25519) by a recorder key the agent never sees. Editing a record
-  and recomputing the hashes -- which defeated v0.1 -- now fails verification.
+  and recomputing the hashes -- which defeated v0.1 -- now fails verification when the verifier is given
+  the recorder's public key.
 - **Anchors and witnesses.** The ledger head is published (signed) to a place the
-  operator cannot rewrite alone; a verifier with only the witness copy can then
-  prove nothing before it was removed or changed.
+  operator cannot rewrite alone; a verifier with the witness copy can then show that records up to the
+  last witnessed anchor were not removed or changed, provided the witness is independent of the operator.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up.
@@ -147,9 +151,10 @@ see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not 
 
 ## Evidence that can be checked without trusting the operator
 
-This holds only if the recorder key is kept where neither the agent nor the operator's own process can read it, and
-the witness copy is held by someone the operator does not control. Without those two, see the limits in
-[SECURITY.md](SECURITY.md).
+This holds only if the signing key is outside the agent's process and account (the recorder runs separately; ideally its own
+OS user or host, or a KMS/TPM that signs on request), the checker gets the recorder's **public key by a route the
+operator cannot alter**, and the witness copy is held somewhere the operator cannot rewrite. Without those, see the
+limits in [SECURITY.md](SECURITY.md).
 
 ```bash
 # 1. a recorder key, kept where the agent process cannot read it
@@ -300,8 +305,9 @@ A report is easy to over-read. The numbered points below are what it does not sa
 
 ## Quickstart
 
-Needs Python 3.9 or newer. Work in a virtual environment (modern Debian and Ubuntu refuse a system-wide `pip install`
-with "externally-managed-environment").
+Needs Python 3.9 or newer. Work in a virtual environment: on recent Debian-based distributions (we saw it on
+Ubuntu 26.04) pip can refuse a system-wide install with "externally-managed-environment"
+([PEP 668](https://peps.python.org/pep-0668/)); this is from our own test run, not a statement about every Ubuntu version.
 
 ```bash
 # Linux / macOS (on Ubuntu first: sudo apt install python3-venv python3-pip)
@@ -318,8 +324,9 @@ cd auditrail
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 # then run everything below as  .venv\Scripts\python.exe -m ...  and  .venv\Scripts\python.exe -m auditrail.cli ...
-# (activating with .venv\Scripts\Activate.ps1 fails under the default Restricted policy; if you want it,
-#  run  Set-ExecutionPolicy -Scope Process Bypass  in that window only)
+# (activating with .venv\Scripts\Activate.ps1 may be blocked by your PowerShell execution policy -- on a Windows client
+#  with no policy set, scripts are usually blocked; if you want to activate, run
+#  Set-ExecutionPolicy -Scope Process Bypass  in that window only)
 ```
 
 Below, `python` means the virtual environment's Python (after activating it, `python` works on Linux too; without
