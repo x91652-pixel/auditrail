@@ -8,12 +8,15 @@ Not on PyPI yet: to try it, follow the [Quickstart](#quickstart).
 > three happen in one session (the "lethal trifecta"), a trick hidden in the text can make it leak the data. auditrail
 > is a small library that can refuse a tool call that would complete that combination, and that writes each decision
 > to a log in which every entry is chained to the one before it (changing an old entry breaks the chain unless every later
-> entry is recomputed, which is why entries are also signed) and signed by a separate *recorder*. Someone who does not
-> trust you can then check, with the recorder's public key obtained from a route you cannot change, that entries were
-> not edited; noticing that entries were deleted or the log cut short needs a witness copy. A *witness* is a place
-> outside the operator's control that keeps copies of the log's fingerprints (*anchors*), published periodically; a
+> entry is recomputed, which is why entries are also signed) and, if you run a separate *recorder* process, signed by it
+> (the Quickstart's ledger is not signed). Someone who does not
+> trust you can then check, with the recorder's public key obtained from a route the operator cannot change, whether
+> entries were edited; noticing that entries were deleted or the log cut short needs a witness copy. The *operator* is whoever
+> runs the agent and owns these files; the *recorder* is the process that holds the signing key and writes the log; the
+> *agent* is the AI program whose tool calls are logged. A *witness* is meant to be a place outside the operator's
+> control that keeps copies of the log's fingerprints (*anchors*), published periodically; a
 > *heartbeat* is a periodic entry in which the recorder says which tools it wraps and how many calls it saw versus
-> recorded, so silent gaps show up. It covers only the tools you wrapped, does not detect prompt injection, and is not a compliance product.
+> recorded, so that, if you pass a gap limit when verifying, silent gaps in the wrapped tools show up. It covers only the tools you wrapped, does not detect prompt injection, and is not a compliance product.
 
 > **Status and what this is not.** Early (v0.2), not on PyPI, with no independent security review. The evidence
 > format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
@@ -81,18 +84,18 @@ results, not what the agent "saw".
 
 ## What it actually does (v0.2)
 
-auditrail is the smallest component that lets someone who does **not** trust you
-check what an agent did through the tools you wrapped. It is a library plus a standalone verifier, not a
+auditrail lets someone who does **not** trust you
+check, given the recorder's public key and a witness copy, what an agent did through the tools you wrapped. It is a library plus a standalone verifier, not a
 governance platform; it is meant to sit next to the gateways and guardrails you
 already use.
 
 - **Signed, hash-chained ledger.** Every record is chained to the previous one
   and signed (Ed25519) by a recorder key the agent never sees. Editing a record
-  and recomputing the hashes -- which defeated v0.1 -- now fails verification when the verifier is given
-  the recorder's public key.
-- **Anchors and witnesses.** The ledger head is published (signed) to a place the
-  operator cannot rewrite alone; a verifier with the witness copy can then show that records up to the
-  last witnessed anchor were not removed or changed, provided the witness is independent of the operator.
+  and recomputing the hashes -- which defeated v0.1 -- now fails verification when you verify with the recorder's
+  public key (a ledger written without a signer still passes after the hashes are recomputed).
+- **Anchors and witnesses.** The ledger head is published (signed) to a place you must arrange so that the
+  operator cannot rewrite it alone; a verifier holding only that copy can then detect removal or editing of records
+  up to the last anchor, provided the witness is independent of the operator.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up.
@@ -151,10 +154,13 @@ see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not 
 
 ## Evidence that can be checked without trusting the operator
 
-This holds only if the signing key is outside the agent's process and account (the recorder runs separately; ideally its own
-OS user or host, or a KMS/TPM that signs on request), the checker gets the recorder's **public key by a route the
-operator cannot alter**, and the witness copy is held somewhere the operator cannot rewrite. Without those, see the
-limits in [SECURITY.md](SECURITY.md).
+This holds only if (1) the signing key is outside the agent's process and account (the recorder runs separately) and,
+for the "without trusting the operator" claim, also out of the operator's reach after the fact -- for example in another
+account or on another host, or in hardware -- so the operator cannot later take the key and re-sign a rewritten history
+(a key that signs on request from a KMS/TPM would also do, but that is not provided: you would write the signer
+yourself); otherwise only an independent witness limits what the operator can rewrite; (2) the checker gets the
+recorder's **public key by a route the operator cannot alter**; and (3) the witness copy is held somewhere the operator
+cannot rewrite. Without those, see the limits in [SECURITY.md](SECURITY.md).
 
 ```bash
 # 1. a recorder key, kept where the agent process cannot read it
@@ -182,7 +188,7 @@ auditrail-verify evidence.jsonl --pubkey keys/recorder.pub --witness witness-cop
 auditrail verify evidence.jsonl --pubkey keys/recorder.pub --witness-file witness-copy.jsonl --max-gap 120
 ```
 
-`pip install` installs only the `auditrail` command. `auditrail-verify` comes from `cd verifier && cargo build --release`
+`pip install` installs only the `auditrail` command. `auditrail-verify` comes from `cd verifier && cargo build --locked --release`
 or from a release download.
 
 The verifier prints `OK` only with a list of what it did **not** check (no key
@@ -305,12 +311,13 @@ A report is easy to over-read. The numbered points below are what it does not sa
 
 ## Quickstart
 
-Needs Python 3.9 or newer. Work in a virtual environment: on recent Debian-based distributions (we saw it on
+Python 3.10 or newer is what CI tests (`pyproject.toml` allows 3.9, untested). Work in a virtual environment (a folder of
+Python packages kept just for this project): on recent Debian-based distributions (we saw it on
 Ubuntu 26.04) pip can refuse a system-wide install with "externally-managed-environment"
 ([PEP 668](https://peps.python.org/pep-0668/)); this is from our own test run, not a statement about every Ubuntu version.
 
 ```bash
-# Linux / macOS (on Ubuntu first: sudo apt install python3-venv python3-pip)
+# Linux / macOS (on Ubuntu first: sudo apt install git python3-venv python3-pip)
 git clone https://github.com/x91652-pixel/auditrail
 cd auditrail
 python3 -m venv .venv && . .venv/bin/activate
@@ -330,7 +337,9 @@ python -m venv .venv
 ```
 
 Below, `python` means the virtual environment's Python (after activating it, `python` works on Linux too; without
-activating, use `python3` or the `.venv` path) and `auditrail` is the command `pip install` created in it.
+activating, use `.venv/bin/python` and `.venv/bin/auditrail`; on Windows `.venv\Scripts\python.exe` and
+`.venv\Scripts\auditrail.exe`; a system `python3` does not see the packages) and `auditrail` is the command `pip install`
+created in it.
 
 Two demos, which write to different places:
 
@@ -342,6 +351,15 @@ auditrail verify examples/demo_ledger.jsonl
 # 2. the installed command: writes to your temporary directory; the last line of its output names the file
 auditrail demo
 auditrail verify <the path printed on that last line>
+```
+
+Windows without activating (same two demos):
+
+```powershell
+.venv\Scripts\python.exe -m examples.mock_demo
+.venv\Scripts\auditrail.exe verify examples\demo_ledger.jsonl
+.venv\Scripts\auditrail.exe demo
+.venv\Scripts\auditrail.exe verify <the path printed on that last line>
 ```
 
 Both run on your machine with no API key. **Each makes one real HTTP request** (to `https://api.github.com/zen`, with
@@ -374,7 +392,8 @@ session = guard.session(agent_id="hr-screener")
 print(read_resume(session, "cand-001"))        # policy-checked and logged
 ```
 
-Then `auditrail verify evidence.jsonl`. See [`examples/mock_demo.py`](examples/mock_demo.py) for the full walkthrough
+Then `auditrail verify evidence.jsonl` (`.venv\Scripts\auditrail.exe verify evidence.jsonl` on Windows without
+activating). See [`examples/mock_demo.py`](examples/mock_demo.py) for the full walkthrough
 (including the trifecta-block and tamper-detection scenarios), [`policies/example_policy.yaml`](policies/example_policy.yaml)
 for a policy file, and [`examples/real_agent_demo.py`](examples/real_agent_demo.py) for a live example with Claude
 doing real tool-use (`ANTHROPIC_API_KEY` required).
@@ -388,9 +407,8 @@ and why the ledger stores argument/result digests rather than raw payloads.
 
 ## Where this fits
 
-auditrail is a runtime primitive, not a platform. It's closest in spirit
-to what SOC 2 did for infrastructure change logs -- a boring, verifiable
-record -- applied to agent tool calls specifically. It's deliberately
+auditrail is a runtime primitive, not a platform. The analogy is the change logs infrastructure teams keep
+-- a boring, verifiable record -- applied to wrapped agent tool calls (an analogy, not a compliance claim). It's deliberately
 narrow and meant to compose with things that already exist:
 
 | If you need... | Consider |
@@ -399,11 +417,11 @@ narrow and meant to compose with things that already exist:
 | Agent discovery, fleet-wide policy across SaaS platforms | An agent governance platform |
 | A certifiable standard for an agent | [AIUC-1](https://www.aiuc-1.com/), a standard for AI agents with third-party certification (per its own pages: accredited auditors and annual re-certification) |
 | An org-wide AI risk/compliance workflow | An AI governance / risk-management software product |
-| **A tamper-evident record of what one agent session actually did, that you own and can verify yourself, in your own code, with no vendor lock-in** | **auditrail** |
+| **A tamper-evident record of the wrapped tool calls in one agent session, that you own and can verify yourself, in your own code, with no vendor lock-in** | **auditrail** |
 
 ## Status
 
-v0.2 -- early, unreleased on PyPI, not yet used in production anywhere, no
+v0.2 -- early, unreleased on PyPI, as far as we know not yet used in production, no
 independent security review. The format is a draft: expect changes until a second
 team has implemented it. Issues, and especially "this
 broke when I tried it against a real agent" reports, are exactly what
@@ -421,7 +439,7 @@ All 783 Python tests (a few run only on POSIX and several only on Windows, the o
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and
 `cd dashboard && cargo test`. Python tests that compare against the Rust verifier are
-skipped until you run `cd verifier && cargo build --release`.
+skipped until you run `cd verifier && cargo build --locked --release`.
 
 The two verifiers are also fuzzed against each other (`tests/test_fuzz.py`, Hypothesis; raise the sample size with
 `AUDITRAIL_FUZZ_EXAMPLES=500`): random ledgers, field edits, raw byte corruption, re-hash attacks, truncation and garbage
