@@ -64,3 +64,25 @@ def test_guard_pipeline_output_verifies_in_rust_and_a_rewrite_does_not(tmp_path)
     (tmp_path / "bad.jsonl").write_text("".join(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n" for r in recs), encoding="utf-8")
     code, out = run(tmp_path / "bad.jsonl", "--pubkey", tmp_path / "k.pub", "--json")
     assert code == 1 and out["status"] == "TAMPERED_LEDGER" and out["bad_seq"] == 1
+
+
+def test_an_empty_witness_gets_the_same_tail_note_in_both_verifiers(tmp_path):
+    """Anchors were given but none exists: every record is outside any anchor, and both say so in the same words."""
+    path = tmp_path / "l.jsonl"
+    led = Ledger(path, signer=Signer.generate(), fsync=False)
+    for i in range(3):
+        led.record(agent_id="a", session_id="s", policy_version="v", tool="t", categories=[], args={"i": i},
+                   decision="allow")
+    (tmp_path / "empty-witness.jsonl").write_text("", encoding="utf-8")
+    code, rust_text = run(path, "--witness", tmp_path / "empty-witness.jsonl")
+    assert code == 0
+    py = subprocess.run([sys.executable, "-m", "auditrail.cli", "verify", str(path), "--witness-file",
+                         str(tmp_path / "empty-witness.jsonl")], capture_output=True, text=True, encoding="utf-8",
+                        cwd=ROOT)
+    assert py.returncode == 0
+    note = "3 record(s) after the last anchor are not covered by any anchor"
+    assert note in py.stdout, py.stdout
+    assert note in rust_text, rust_text
+    # the JSON structure is unchanged
+    code, js = run(path, "--witness", tmp_path / "empty-witness.jsonl", "--json")
+    assert js["anchored_upto"] is None and js["unanchored_tail"] == 3
