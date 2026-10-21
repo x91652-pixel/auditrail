@@ -224,6 +224,10 @@ def anchor_ledger(
     return {"status": "ANCHORED", "anchor": record}
 
 
+def _os_reason(exc: OSError) -> str:
+    return exc.strerror or exc.__class__.__name__
+
+
 def _report(status: str, detail: str, anchored_upto=None, unanchored_tail=None, **extra) -> dict:
     return {"status": status, "anchored_upto": anchored_upto, "unanchored_tail": unanchored_tail, "detail": detail, **extra}
 
@@ -263,7 +267,10 @@ def verify_anchors(
     max_seq = records[-1]["seq"] if records else None
 
     deferred: list = []
-    anchors, problem = _parse_anchors(Path(anchors_path), public_keys, deferred)  # §6.2
+    try:
+        anchors, problem = _parse_anchors(Path(anchors_path), public_keys, deferred)  # §6.2
+    except OSError as exc:  # exists but cannot be read (a directory, a lock, permissions): not "no anchors"
+        return _report("SINK_UNREACHABLE", f"anchors file could not be read: {_os_reason(exc)}")
     if problem is not None:
         return _report(problem["status"], problem["detail"], line=problem["line"])
 
@@ -315,7 +322,10 @@ def verify_witness_file(records: list[dict], witness_path: str | Path, public_ke
     max_seq = records[-1]["seq"] if records else None
     upto = None
     count = 0
-    parsed, problem = _anchor_lines(path)
+    try:
+        parsed, problem = _anchor_lines(path)
+    except OSError as exc:  # a directory, a locked file, no permission: the witness could not be consulted
+        return _report("SINK_UNREACHABLE", f"witness file could not be read: {_os_reason(exc)}")
     deferred: list = []
     unchecked: set = set()
     for lineno, rec in parsed:
