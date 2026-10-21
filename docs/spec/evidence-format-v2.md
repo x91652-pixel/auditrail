@@ -186,6 +186,24 @@ every check it was not asked to run. A verifier that prints a bare "OK" is not c
 `SINK_UNREACHABLE` (a configured witness could not be read) is not tampering
 evidence, but the verifier MUST NOT claim the anchor was checked.
 
+What "could not be read" covers, as the two reference implementations behave today:
+
+- Python (`verify_anchors`, `verify_witness_file`): a witness file or anchors file that does not exist, or that exists but
+  cannot be opened or read (a directory, a file another process holds exclusively, no permission), is
+  `SINK_UNREACHABLE`; so is a sink reference whose sink is not configured. It is inconclusive (exit 1), not tampering.
+  The command line `auditrail verify --anchors FILE` is stricter: a FILE that is not a file at all is an unreadable
+  *input* and stops with `[ERROR]` and exit 2 before any verification (the library function still treats a missing
+  anchors file as "no anchors", which `auditrail anchor` relies on to create one). A missing `--witness-file` stays
+  `SINK_UNREACHABLE`.
+- Rust (`auditrail-verify`): it has no sinks and reads the `--witness` file before verifying, so a witness file that
+  cannot be read is reported as `[ERROR] <file>: <reason>` on standard error with exit 2 and no verification result; `SINK_UNREACHABLE`
+  is never produced by it. This is a known difference between the two programs (a missing witness is exit 1 in Python
+  and exit 2 in Rust); the conformance vectors do not include an unreadable witness.
+
+The no-floating-point rule of section 2 also applies to anchor lines and witness lines: both implementations read them
+with the same strict reader, so a number with a fraction or exponent in an anchor line (for example `"seq":0.0`) makes
+the line malformed, reported as `TAMPERED_ANCHOR` ("malformed anchor line"), not as a valid anchor with a different type.
+
 ### 6.1 Precedence (the order both reference implementations follow)
 
 1. **Reading** (section 2): not UTF-8, an unparseable line or a forbidden value is `TAMPERED_LEDGER`; a first
