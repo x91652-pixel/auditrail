@@ -153,8 +153,10 @@ def _public_key_problem(raw: bytes, exc: Exception) -> str:
     rule = "a public key file must hold exactly 64 hexadecimal digits (32 bytes), optionally surrounded by whitespace"
     if raw.startswith(b"\xef\xbb\xbf"):
         return f"{rule}; this file starts with a UTF-8 byte order mark: save it without BOM"
-    if raw.startswith((b"\xff\xfe", b"\xfe\xff")) or (len(raw) > 1 and b"\x00" in raw):
-        return f"{rule}; this file looks like UTF-16 (often from PowerShell's > redirection): write it as UTF-8 or ASCII"
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return f"{rule}; this file starts with a UTF-16 byte order mark (often from PowerShell's > redirection): write it as UTF-8 or ASCII"
+    if b"\x00" in raw:
+        return f"{rule}; this file contains NUL bytes (often UTF-16, e.g. from PowerShell's > redirection): write it as UTF-8 or ASCII"
     try:
         digits = raw.decode("utf-8").strip(_RUST_WHITESPACE)
     except UnicodeDecodeError:
