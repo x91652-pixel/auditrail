@@ -90,7 +90,7 @@ governance platform; it is meant to sit next to the gateways and guardrails you
 already use.
 
 - **Signed, hash-chained ledger.** Every record is chained to the previous one
-  and signed (Ed25519) by a recorder key the agent never sees. Editing a record
+  and signed (Ed25519) by a recorder key the agent never sees (when the recorder runs as its own process). Editing a record
   and recomputing the hashes -- which defeated v0.1 -- now fails verification when you verify with the recorder's
   public key (a ledger written without a signer still passes after the hashes are recomputed).
 - **Anchors and witnesses.** The ledger head is published (signed) to a place you must arrange so that the
@@ -155,8 +155,9 @@ see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not 
 ## Evidence that can be checked without trusting the operator
 
 This holds only if (1) the signing key is outside the agent's process and account (the recorder runs separately) and,
-for the "without trusting the operator" claim, also out of the operator's reach after the fact -- for example in another
-account or on another host, or in hardware -- so the operator cannot later take the key and re-sign a rewritten history
+for the "without trusting the operator" claim, also out of the operator's reach after the fact -- for example on a host the operator
+does not administer, or in hardware that signs on request (another OS account that the operator can administer does not
+count) -- so the operator cannot later take the key and re-sign a rewritten history
 (a key that signs on request from a KMS/TPM would also do, but that is not provided: you would write the signer
 yourself); otherwise only an independent witness limits what the operator can rewrite; (2) the checker gets the
 recorder's **public key by a route the operator cannot alter**; and (3) the witness copy is held somewhere the operator
@@ -181,7 +182,7 @@ guard.start_heartbeats()             # the agent's own "still wrapped" signal
 ```
 
 ```bash
-# 3. anyone, offline, with only the PUBLIC key and a witness copy.
+# 3. anyone, offline, with the recorder's public key (obtained by a route the operator cannot alter) and a witness copy.
 #    auditrail-verify is the standalone Rust binary (build it or download it, see below):
 auditrail-verify evidence.jsonl --pubkey keys/recorder.pub --witness witness-copy.jsonl --max-gap 120
 #    the Python CLI does the same; note the flag is --witness-file there:
