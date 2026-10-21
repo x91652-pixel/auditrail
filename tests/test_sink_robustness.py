@@ -71,3 +71,39 @@ def test_an_unreadable_witness_by_permission_is_unreachable(world):
         assert res["status"] == "SINK_UNREACHABLE"
     finally:
         (w / "w.jsonl").chmod(0o600)
+
+
+# --- an explicit --anchors path that is not a file is an unreadable input
+def _cli(*argv):
+    r = subprocess.run([sys.executable, "-m", "auditrail.cli", *map(str, argv)], cwd=ROOT, capture_output=True, timeout=120)
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+
+def test_verify_with_a_missing_anchors_file_is_exit_2_with_one_line(world):
+    w, keys = world
+    code, out, err = _cli("verify", w / "l.jsonl", "--anchors", w / "nope.jsonl")
+    assert code == 2 and out.strip() == ""
+    lines = [x for x in err.splitlines() if x.strip()]
+    assert len(lines) == 1 and lines[0].startswith("[ERROR] ") and "nope.jsonl" in lines[0]
+    assert "file not found" in lines[0] and "leave out --anchors" in lines[0]
+    assert "Traceback" not in err
+
+
+def test_verify_with_an_anchors_directory_is_also_exit_2(world):
+    w, keys = world
+    (w / "adir").mkdir()
+    code, out, err = _cli("verify", w / "l.jsonl", "--anchors", w / "adir")
+    assert code == 2 and "[ERROR]" in err
+
+
+def test_without_anchors_and_with_a_real_anchors_file_nothing_changes(world):
+    w, keys = world
+    assert _cli("verify", w / "l.jsonl")[0] == 0
+    code, out, err = _cli("verify", w / "l.jsonl", "--anchors", w / "a.jsonl")
+    assert code in (0, 1) and "[ERROR]" not in err
+
+
+def test_creating_a_new_anchors_file_with_the_anchor_command_still_works(world):
+    w, keys = world
+    code, out, err = _cli("anchor", "--ledger", w / "l.jsonl", "--anchors", w / "new-anchors.jsonl")
+    assert code == 0 and (w / "new-anchors.jsonl").exists(), (out, err)

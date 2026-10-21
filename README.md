@@ -197,6 +197,10 @@ are not covered. (`SINK_*` exist only in the Python verifier; the Rust one reads
 witness file and has no sinks. The full status list, including the record- and
 heartbeat-level ones, is in the format spec.)
 
+**Behavior change:** `auditrail verify --anchors FILE` now stops with `[ERROR] FILE: file not found` and exit code 2 when FILE
+does not exist (before, it reported `OK` as if there were no anchors yet). Leave out `--anchors` to verify without one. A
+witness copy or anchors file that exists but cannot be read (a directory, a lock, permissions) is `SINK_UNREACHABLE`.
+
 What anchoring proves: records up to the last anchor were not rewritten, deleted,
 or reordered, provided that anchor has been stored outside the owner's control.
 Truncation below an anchor is detected in the same way.
