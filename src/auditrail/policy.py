@@ -1,13 +1,10 @@
 """Policy engine: allow-listing plus "lethal trifecta" enforcement.
 
-The lethal trifecta (coined by Simon Willison, and cited by OWASP's Top 10
-for Agentic Applications 2026 as the pattern behind most real-world agent
-data-exfiltration incidents) is: an agent session that simultaneously has
-(1) access to private/sensitive data, (2) exposure to untrusted, attacker-
-influenceable content, and (3) a way to communicate externally. Any two of
-those are usually fine; all three in the same session is how a prompt
-injected into "untrusted content" turns into a real exfiltration path
-(EchoLeak, Slack AI, ForcedLeak, GitHub MCP all follow this shape).
+The lethal trifecta (named by Simon Willison, June 2025) is: an agent session
+that simultaneously has (1) access to private/sensitive data, (2) exposure to
+untrusted, attacker-influenceable content, and (3) a way to communicate
+externally. With all three in the same session, a prompt injected into
+"untrusted content" can become an exfiltration path.
 
 This engine tracks which categories have been touched so far and refuses to
 allow a tool call that would complete the trifecta -- unless the policy

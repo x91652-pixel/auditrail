@@ -23,6 +23,7 @@ def started(monkeypatch):
     def fake_start(self):
         seen["token"] = self.token
         seen["started"] = True
+        self._server.server_close()  # the constructor bound a port; do not leave it to the collector
         raise KeyboardInterrupt
 
     monkeypatch.setattr(RecorderService, "start", fake_start)

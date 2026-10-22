@@ -212,3 +212,52 @@ def test_c1_format_all_targets_are_each_checked_against_the_inputs(env):
     code, out, err = run(env / "r.json", "--format", "all", "--out", env / "r", "--force")
     assert code == 2 and _sha(env / "r.json") == before
     assert not (env / "r.md").exists() and not (env / "r.html").exists()
+
+
+# --- T-029: a malformed public key file is a one-line error with exit 2 in every command
+def _cli(*argv):
+    r = subprocess.run([sys.executable, "-m", "auditrail.cli", *map(str, argv)], cwd=ROOT, capture_output=True, timeout=120)
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+
+BAD_KEYS = {
+    "bom": (b"\xef\xbb\xbf" + b"ab" * 32 + b"\n", "byte order mark"),
+    "utf16": ("ab" * 32 + "\n").encode("utf-16"), 
+    "short": (b"ab" * 10, "found 20 hexadecimal digits"),
+    "long": (b"ab" * 40, "found 80 hexadecimal digits"),
+    "words": (b"not a key", "exactly 64 hexadecimal digits"),
+    "empty": (b"", "exactly 64 hexadecimal digits"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(BAD_KEYS))
+@pytest.mark.parametrize("command", ["verify", "report", "reconcile"])
+def test_malformed_public_key_is_one_line_and_exit_2(env, name, command):
+    content = BAD_KEYS[name]
+    hint = None
+    if isinstance(content, tuple):
+        content, hint = content
+    (env / "bad.pub").write_bytes(content)
+    argv = {"verify": ["verify", env / "l.jsonl"], "report": ["report", env / "l.jsonl"],
+            "reconcile": ["reconcile", env / "l.jsonl"]}[command] + ["--pubkey", env / "bad.pub"]
+    code, out, err = _cli(*argv)
+    assert code == 2, (out, err)
+    text = err.strip()
+    assert "Traceback" not in err and "Traceback" not in out
+    assert "bad.pub" in text and "64 hexadecimal digits" in text
+    assert len([l for l in text.splitlines() if l.strip()]) == 1, text
+    if name == "utf16":
+        assert "UTF-16" in text
+    elif hint:
+        assert hint in text
+
+
+def test_a_missing_public_key_file_is_also_one_line(env):
+    code, out, err = _cli("verify", env / "l.jsonl", "--pubkey", env / "nope.pub")
+    assert code == 2 and "Traceback" not in err
+    assert len([l for l in err.splitlines() if l.strip()]) == 1
+
+
+def test_a_good_public_key_still_verifies(env):
+    code, out, err = _cli("verify", env / "l.jsonl", "--pubkey", env / "k.pub")
+    assert code == 0, (out, err)
