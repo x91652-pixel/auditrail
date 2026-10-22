@@ -223,9 +223,12 @@ def _spawn_recorder(tmp_path, *extra):
     out: list = []
 
     def pump():
-        for line in proc.stdout:
-            out.append(line)
-            lines.put(line)
+        try:
+            for line in proc.stdout:
+                out.append(line)
+                lines.put(line)
+        finally:
+            proc.stdout.close()  # the reader owns the pipe; closing it here leaves no unclosed file behind
 
     threading.Thread(target=pump, daemon=True).start()
     port = None
@@ -317,10 +320,12 @@ def test_h5_a_wrong_token_is_refused_by_the_separate_process(tmp_path):
         assert port, "".join(out)
         from auditrail.recorder import RecorderUnavailable
 
-        g = Guard(PolicyEngine(POLICY), RemoteLedger(port=port, token="not-the-token"))
+        remote = RemoteLedger(port=port, token="not-the-token")
+        g = Guard(PolicyEngine(POLICY), remote)
         work = g.guarded_tool("work", categories=["internal"])(lambda n: n)
         with pytest.raises(RecorderUnavailable):
             work(g.session("a"), 1)
+        remote.close()
     finally:
         _stop(proc, out, timeout=0.5 if os.name == "nt" else 30)  # hard stop is enough here
     assert not [r for r in Ledger(tmp_path / "l.jsonl") if r["kind"] == "call"]

@@ -36,6 +36,7 @@ def started(monkeypatch):
 
     def fake_start(self):
         seen["started"] = True
+        self._server.server_close()  # the constructor bound a port; do not leave it to the collector
         raise KeyboardInterrupt  # end serve() right after the permission gate
 
     monkeypatch.setattr(RecorderService, "start", fake_start)

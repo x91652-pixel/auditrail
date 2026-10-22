@@ -294,11 +294,15 @@ def test_token_with_non_ascii_characters_is_accepted_when_correct(tmp_path):
     ledger = Ledger(tmp_path / "l.jsonl", signer=Signer.generate(), fsync=False)
     svc = RecorderService(ledger, token="tökén-密碼", heartbeat_s=0).start()
     try:
-        good = Guard(PolicyEngine(cfg()), RemoteLedger(port=svc.address[1], token="tökén-密碼"))
+        good_remote = RemoteLedger(port=svc.address[1], token="tökén-密碼")
+        good = Guard(PolicyEngine(cfg()), good_remote)
         assert tool(good, "read_db")(good.session("a")) == "ran"
-        bad = Guard(PolicyEngine(cfg()), RemoteLedger(port=svc.address[1], token="wrong"))
+        good_remote.close()
+        bad_remote = RemoteLedger(port=svc.address[1], token="wrong")
+        bad = Guard(PolicyEngine(cfg()), bad_remote)
         with pytest.raises(RecorderUnavailable):
             tool(bad, "read_db")(bad.session("a"))
+        bad_remote.close()
     finally:
         svc.stop()
 

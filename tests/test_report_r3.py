@@ -84,7 +84,7 @@ def test_l2_messages_without_the_other_side_are_counted_as_not_compared(env):
     data = build_report(w / "a.jsonl", public_key_paths=[w / "k.pub"], peer_ledgers=[w / "c.jsonl"])
     res, ran, nc = lists(render_md(data))
     assert data["a2a"]["unverifiable"] == 2
-    assert "2 message\(s\) could not be compared" in nc
+    assert r"2 message\(s\) could not be compared" in nc
     assert "Agent-to-agent messages" not in ran
 
 
@@ -181,13 +181,13 @@ def test_c3_peer_keys_and_record_counts_are_printed_and_same_key_is_flagged(env)
     res, ran, nc = lists(md)
     kid = signer.key_id
     assert kid in md.split("## 9.")[1]
-    assert "1 record\(s\)" in md.split("## 9.")[1]
+    assert r"1 record\(s\)" in md.split("## 9.")[1]
     assert report.INDEPENDENCE in md.split("## 9.")[1].replace("\\", "")
     assert "The same signing key is a clue that it is not; a different key does not show that it is." in ran
     assert "same signing key as the ledger" in ran and kid in ran
     nokey = render_md(build_report(w / "a.jsonl", peer_ledgers=[w / "b.jsonl"]))
     assert "Peer ledger signatures were not checked" in nokey
-    assert "were not checked \(no public key was given\)" in nokey.split("## 9.")[1]
+    assert r"were not checked \(no public key was given\)" in nokey.split("## 9.")[1]
 
 
 # --- T-038 C-4: no reassurance where nothing was examined
@@ -197,7 +197,7 @@ LEGACY = Path(__file__).resolve().parent / "fixtures" / "legacy_v01_ledger.jsonl
 def test_c4_legacy_ledger_says_it_was_not_examined(env):
     md = render_md(build_report(LEGACY))
     res, ran, nc = lists(md)
-    assert "The ledger was not examined \(v0.1 format; see LEGACY_FORMAT\)." in nc
+    assert r"The ledger was not examined \(v0.1 format; see LEGACY_FORMAT\)." in nc
     for reassurance in ("Nothing further was requested", "No additional item was left unchecked"):
         assert reassurance not in md
 
@@ -212,7 +212,7 @@ def test_c4_empty_ledger_has_no_reassurance_in_not_checked(env):
 def test_c4_no_anchor_given_is_said_directly(env):
     w, _ = env
     md = render_md(build_report(w / "l.jsonl", public_key_paths=[w / "k.pub"]))
-    assert "no anchor was given \(or the file held none\)" in md.split("## 2.")[0]
+    assert r"no anchor was given \(or the file held none\)" in md.split("## 2.")[0]
     assert "or no anchor was given" not in md
 
 
@@ -304,7 +304,7 @@ def test_t042_with_a_secondary_finding_the_unclean_sentence_comes_first_and_ok_i
     first_para = [x for x in res.split("\n\n") if x.strip() and not x.startswith("###")][0]
     assert first_para.startswith(SENTENCE)
     assert res.index("found no inconsistency") > res.index("did not come out clean")
-    assert "Verifier status \(main ledger\): OK." in res
+    assert r"Verifier status \(main ledger\): OK." in res
     assert "The checks that were run found no inconsistency in the evidence they covered" not in md.split("## 10.")[0]
     assert "The main ledger's result is OK." in res
 

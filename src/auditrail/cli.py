@@ -19,7 +19,13 @@ def _sinks(git_repo: str | None) -> dict:
 def _keys(args: argparse.Namespace) -> dict | None:
     from .keys import load_public_keys
 
-    return load_public_keys(args.pubkey) if getattr(args, "pubkey", None) else None
+    if not getattr(args, "pubkey", None):
+        return None
+    try:
+        return load_public_keys(args.pubkey)
+    except (ValueError, OSError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -296,7 +302,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="auditrail", description="Tamper-evident audit trails for AI agents.")
     sub = p.add_subparsers(dest="command", required=True)
 
-    p_verify = sub.add_parser("verify", help="Verify a ledger offline: chain, signatures, anchors, witness, heartbeats.")
+    p_verify = sub.add_parser("verify", help="Verify a ledger offline: chain, signatures, anchors, witness, heartbeats.",
+                              epilog="Exit codes: 0 = no finding; 1 = a finding or an inconclusive result (not necessarily "
+                                     "tampering); 2 = an input file could not be read, and no result is produced.")
     p_verify.add_argument("ledger_path")
     p_verify.add_argument("--pubkey", action="append", help="Trusted recorder public key (.pub). Repeatable. "
                           "When given, every record and anchor must be signed by one of these keys.")
@@ -343,7 +351,9 @@ def build_parser() -> argparse.ArgumentParser:
                             "the findings are printed as warnings instead of refusing to start.")
     p_rec.set_defaults(func=cmd_recorder)
 
-    p_rc = sub.add_parser("reconcile", help="Cross-check agent-to-agent messages between ledgers.")
+    p_rc = sub.add_parser("reconcile", help="Cross-check agent-to-agent messages between ledgers.",
+                          epilog="Exit codes: 0 = no finding; 1 = a finding or an inconclusive result (not necessarily "
+                                 "tampering); 2 = an input file could not be read, and no result is produced.")
     p_rc.add_argument("ledgers", nargs="+")
     p_rc.add_argument("--pubkey", action="append", help="Trusted recorder public key(s); every record must be signed.")
     p_rc.add_argument("--agent", action="append", help="Agent id whose ledger is among those given (repeatable). "
@@ -351,7 +361,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_rc.add_argument("--json", action="store_true")
     p_rc.set_defaults(func=cmd_reconcile)
 
-    p_rep = sub.add_parser("report", help="Write a readable report of what a verification found and did not examine.")
+    p_rep = sub.add_parser("report", help="Write a readable report of what a verification found and did not examine.",
+                           epilog="Exit codes: 0 = the main ledger and every supplied check found nothing; 1 = a finding or an "
+                                  "inconclusive result (not necessarily tampering); 2 = an input file or the output could not "
+                                  "be read or written, and no result is produced.")
     p_rep.add_argument("ledger_path")
     p_rep.add_argument("--pubkey", action="append", help="Trusted recorder public key (.pub). Repeatable.")
     p_rep.add_argument("--anchors", help="The owner's anchors.jsonl.")

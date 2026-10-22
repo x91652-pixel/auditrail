@@ -1,8 +1,8 @@
 """Append-only, hash-chained evidence ledger for AI agent decisions.
 
 Each record is chained to the previous one: hash = sha256(prev_hash +
-canonical_json(record without hash/sig)), the construction Certificate
-Transparency logs use. The full format is specified in
+canonical_json(record without hash/sig)): a linear hash chain (Certificate
+Transparency logs use a Merkle tree instead). The full format is specified in
 docs/spec/evidence-format-v2.md, so a verifier can be written in any language
 (verifier/ is an independent one in Rust).
 
