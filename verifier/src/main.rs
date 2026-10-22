@@ -110,6 +110,12 @@ fn main() -> ExitCode {
         println!("[OK] {ledger_path}: {}", report.detail);
         if let Some(u) = report.anchored_upto {
             println!("  anchored up to seq={u} ({} record(s) after it not covered)", report.unanchored_tail.unwrap_or(0));
+        } else if opts.anchors.is_some() || opts.witness.is_some() {
+            // anchors were given but none anchors anything: say what is not covered, as the Python verifier does
+            let t = report.unanchored_tail.unwrap_or(0);
+            if t > 0 {
+                println!("  note: {t} record(s) after the last anchor are not covered by any anchor");
+            }
         }
         for n in &not_checked {
             println!("  not checked: {n}");
