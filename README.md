@@ -248,7 +248,8 @@ heartbeat-level ones, is in the format spec.)
 
 **Behavior change:** `auditrail verify --anchors FILE` now stops with `[ERROR] FILE: file not found` and exit code 2 when FILE
 does not exist (before, it reported `OK` as if there were no anchors yet). Leave out `--anchors` to verify without one. A
-witness copy or anchors file that exists but cannot be read (a directory, a lock, permissions) is `SINK_UNREACHABLE`.
+witness copy, or an anchors file that is a regular file but cannot be read (a lock, permissions), is `SINK_UNREACHABLE`; a
+directory given to `--anchors` is an `[ERROR]` with exit code 2 (`not a file`).
 
 What anchoring proves: records up to the last anchor were not rewritten, deleted,
 or reordered, provided that anchor has been stored outside the owner's control.
@@ -439,7 +440,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 802 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 812 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](docs/spec/vectors) through the independent verifier) and

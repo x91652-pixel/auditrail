@@ -94,6 +94,10 @@ def test_verify_with_an_anchors_directory_is_also_exit_2(world):
     (w / "adir").mkdir()
     code, out, err = _cli("verify", w / "l.jsonl", "--anchors", w / "adir")
     assert code == 2 and "[ERROR]" in err
+    assert "not a file" in err and "file not found" not in err
+    # a path that does not exist keeps the old wording
+    code, out, err = _cli("verify", w / "l.jsonl", "--anchors", w / "nope.jsonl")
+    assert code == 2 and "file not found" in err and "not a file" not in err
 
 
 def test_without_anchors_and_with_a_real_anchors_file_nothing_changes(world):

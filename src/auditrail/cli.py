@@ -36,7 +36,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return 2
     if args.anchors and not Path(args.anchors).is_file():
         # An explicit path that is not a file is an input that cannot be read, not "no anchors yet".
-        print(f"[ERROR] {args.anchors}: file not found (no result is produced; leave out --anchors to verify without one)",
+        why = "not a file" if Path(args.anchors).exists() else "file not found"
+        print(f"[ERROR] {args.anchors}: {why} (no result is produced; leave out --anchors to verify without one)",
               file=sys.stderr)
         return 2
     if args.legacy_v01:
