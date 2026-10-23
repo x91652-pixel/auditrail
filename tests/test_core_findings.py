@@ -172,3 +172,21 @@ def test_python_and_rust_report_the_same_coverage_for_unordered_anchors(tmp_path
     py = verify_all(ledger, **{pyflag: anchors})
     rs = rust(ledger, flag, anchors)
     assert (py["status"], py["anchored_upto"], py["unanchored_tail"]) == (rs["status"], rs["anchored_upto"], rs["unanchored_tail"])
+
+
+# ---------------------------------------------------------------- very deep JSON on a witness line
+DEEP = b"[" * 100000 + b"\n"
+
+
+def test_a_deeply_nested_line_in_a_git_witness_is_skipped_not_a_crash(git_world):
+    w, repo, keys = git_world
+    good = (repo / "anchors" / "anchors.jsonl").read_bytes()
+    _replace_witness(repo, DEEP + good)
+    assert _verify(w, repo, keys)["status"] == "OK"
+    _replace_witness(repo, DEEP)
+    assert _verify(w, repo, keys)["status"] == "SINK_MISMATCH"
+
+
+def test_a_deeply_nested_line_in_a_file_witness_is_skipped_not_a_crash(tmp_path):
+    (tmp_path / "w.jsonl").write_bytes(DEEP)
+    assert FileSink(tmp_path / "w.jsonl").fetch_contains("file:w.jsonl", "00" * 32) is False

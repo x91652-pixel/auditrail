@@ -377,7 +377,7 @@ class FileSink:
         for raw in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 obj = json.loads(raw)
-            except ValueError:
+            except (ValueError, RecursionError):  # malformed, or nested too deeply to parse: unusable, skip it
                 continue
             # a line that is valid JSON but not an object ([1], 7, "x") is as unusable as a malformed one
             if isinstance(obj, dict) and obj.get("anchor_hash") == anchor_hash:
@@ -457,7 +457,7 @@ class GitSink:
         for raw in result.stdout.splitlines():
             try:
                 obj = json.loads(raw)
-            except ValueError:
+            except (ValueError, RecursionError):  # malformed, or nested too deeply to parse: unusable, skip it
                 continue
             # a line that is valid JSON but not an object ([1], 7, "x") is as unusable as a malformed one
             if isinstance(obj, dict) and obj.get("anchor_hash") == anchor_hash:
