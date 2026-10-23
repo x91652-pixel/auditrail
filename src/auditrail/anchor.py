@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 from . import _strict
 from ._strict import is_int
 from .keys import DEFAULT_ALG, TAG_ANCHOR, Signer, key_algorithm, supported_algorithms, verify_with
-from .ledger import GENESIS_HASH, Ledger, _canonical
+from .ledger import GENESIS_HASH, Ledger, _canonical, _utc_ts
 
 ANCHOR_VERSION = 1  # unsigned
 SIGNED_ANCHOR_VERSION = 2
@@ -44,7 +44,7 @@ class SinkUnreachable(Exception):
 
 
 def _utc_now(clock: Callable[[], float] = time.time) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
+    return _utc_ts(clock())
 
 
 def _anchor_hash(body: dict) -> str:

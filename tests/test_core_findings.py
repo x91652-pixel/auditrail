@@ -190,3 +190,35 @@ def test_a_deeply_nested_line_in_a_git_witness_is_skipped_not_a_crash(git_world)
 def test_a_deeply_nested_line_in_a_file_witness_is_skipped_not_a_crash(tmp_path):
     (tmp_path / "w.jsonl").write_bytes(DEEP)
     assert FileSink(tmp_path / "w.jsonl").fetch_contains("file:w.jsonl", "00" * 32) is False
+
+
+# ---------------------------------------------------------------- the writer formats times the same way as before
+import time as _time  # noqa: E402
+
+
+@pytest.mark.parametrize("epoch", [0, 1, 951782400, 1_700_000_000, 1_700_000_000.9, 1_767_225_599, 2_000_000_000])
+def test_the_shared_formatter_equals_the_old_gmtime_output(epoch):
+    from auditrail.ledger import _utc_ts
+
+    old = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(epoch))
+    assert _utc_ts(epoch) == old
+
+
+def test_the_writer_stamps_the_same_text_with_a_fixed_clock(tmp_path):
+    from auditrail.anchor import _utc_now
+
+    led = Ledger(tmp_path / "l.jsonl", clock=lambda: 1_700_000_000.4, fsync=False)
+    rec = led.record(agent_id="a", session_id="s", policy_version="p", tool="t", categories=[], args={}, decision="allow")
+    assert rec.to_dict()["ts"] == "2023-11-14T22:13:20Z"
+    assert _utc_now(lambda: 1_700_000_000.4) == "2023-11-14T22:13:20Z"
+
+
+def test_the_writer_no_longer_crashes_past_the_year_3000(tmp_path):
+    from auditrail.anchor import _utc_now
+    from auditrail.ledger import _utc_ts
+
+    assert _utc_ts(253402300799) == "9999-12-31T23:59:59Z"
+    assert _utc_now(lambda: 253402300799) == "9999-12-31T23:59:59Z"
+    led = Ledger(tmp_path / "l.jsonl", clock=lambda: 253402300799, fsync=False)
+    assert led.record(agent_id="a", session_id="s", policy_version="p", tool="t", categories=[], args={},
+                      decision="allow").to_dict()["ts"] == "9999-12-31T23:59:59Z"

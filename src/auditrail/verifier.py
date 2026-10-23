@@ -19,13 +19,12 @@ docs/spec/vectors/ and tests/test_fuzz.py hold them to the same answers.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from . import _strict
 from .keys import DEFAULT_ALG, TAG_RECORD, key_algorithm, supported_algorithms, verify_with
-from .ledger import FORMAT_VERSION, GENESIS_HASH, record_hash
+from .ledger import FORMAT_VERSION, GENESIS_HASH, _utc_ts, record_hash
 
 
 def _fail(status: str, detail: str, **extra: Any) -> dict:
@@ -198,13 +197,8 @@ def verify_legacy_v01(path) -> dict:
                       "no anchors, witness or heartbeats exist for v0.1 ledgers"]}
 
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
-
-
 def _fmt(epoch: int) -> str:
-    # Not time.gmtime: the C library on Windows stops at the year 3000, and the format allows up to 9999.
-    d = _EPOCH + timedelta(seconds=epoch)
-    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}T{d.hour:02d}:{d.minute:02d}:{d.second:02d}Z"
+    return _utc_ts(epoch)  # one formatter for reading and writing; not time.gmtime (stops at 3000 on Windows)
 
 
 def check_heartbeats(records: list[dict], max_gap_s: int) -> tuple[Optional[dict], list[dict]]:
