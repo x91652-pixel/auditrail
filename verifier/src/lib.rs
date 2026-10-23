@@ -347,11 +347,26 @@ fn seq_of(rec: &Map<String, Value>) -> i64 {
     rec.get("seq").and_then(Value::as_i64).unwrap_or(-1)
 }
 
+/// seq -> position of the first record with that seq, built once so that each anchor line is a lookup, not a scan
+/// (a ledger and an anchors file of n lines each would otherwise cost n*n comparisons).
+fn seq_index(ledger: &[Map<String, Value>]) -> HashMap<i64, usize> {
+    let mut idx = HashMap::with_capacity(ledger.len());
+    for (i, r) in ledger.iter().enumerate() {
+        idx.entry(seq_of(r)).or_insert(i);
+    }
+    idx
+}
+
 /// Compare one valid anchor against the ledger. Err(report) on TRUNCATED / REWRITTEN.
-fn compare_to_ledger(a: &Map<String, Value>, ledger: &[Map<String, Value>], what: &str) -> Result<i64, Report> {
+fn compare_to_ledger(
+    a: &Map<String, Value>,
+    ledger: &[Map<String, Value>],
+    index: &HashMap<i64, usize>,
+    what: &str,
+) -> Result<i64, Report> {
     let seq = seq_of(a);
     let max_seq = ledger.last().map(seq_of).unwrap_or(-1);
-    let Some(led) = ledger.iter().find(|r| seq_of(r) == seq) else {
+    let Some(led) = index.get(&seq).map(|&i| &ledger[i]) else {
         return Err(Report::fail("TRUNCATED", format!("ledger ends at seq={max_seq}, but {what} needs seq={seq}"), None));
     };
     if s(led, "hash") != s(a, "head_hash") {
@@ -407,8 +422,9 @@ fn check_anchors_file(
         return Err(Report::fail("TAMPERED_ANCHOR", format!("anchors file: {p}"), None));
     }
     let mut upto = None;
+    let index = seq_index(ledger);
     for a in &lines {
-        let seq = compare_to_ledger(a, ledger, "anchors file")?;
+        let seq = compare_to_ledger(a, ledger, &index, "anchors file")?;
         upto = Some(upto.map_or(seq, |u: i64| u.max(seq)));
     }
     Ok(upto)
@@ -423,13 +439,14 @@ fn check_witness(
 ) -> Result<Option<i64>, Report> {
     let (lines, problem) = anchor_lines(bytes);
     let mut upto = None;
+    let index = seq_index(ledger);
     for (i, a) in lines.iter().enumerate() {
         match check_anchor_line(a, keys) {
             Ok(()) => {}
             Err((st, d)) => return Err(Report::fail(&st, format!("witness: line {}: {d}", i + 1), None)),
         }
         note_unchecked_alg(a, unchecked);
-        let seq = compare_to_ledger(a, ledger, "witness")?;
+        let seq = compare_to_ledger(a, ledger, &index, "witness")?;
         upto = Some(upto.map_or(seq, |u: i64| u.max(seq)));
     }
     if let Some(p) = problem {

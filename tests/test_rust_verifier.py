@@ -116,3 +116,45 @@ def test_the_spec_statements_about_anchor_floats_and_unreadable_witnesses_hold(t
     r = subprocess.run([str(BINARY), str(path), "--witness", str(tmp_path / "missing.jsonl")], capture_output=True,
                        text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 2 and "[ERROR]" in r.stderr and "SINK_UNREACHABLE" not in r.stdout + r.stderr
+
+
+def _many_anchors(tmp_path, n):
+    """A ledger of n records and n valid unsigned v1 anchor lines (one per record), chained correctly."""
+    import hashlib
+
+    from auditrail.ledger import _canonical
+
+    path = tmp_path / "big.jsonl"
+    led = Ledger(path, fsync=False)
+    for i in range(n):
+        led.record(agent_id="a", session_id="s", policy_version="v", tool="t", categories=[], args={"i": i},
+                   decision="allow")
+    records = list(led)
+    prev = "0" * 64
+    lines = []
+    for r in records:
+        body = {"anchor_version": 1, "seq": r["seq"], "head_hash": r["hash"], "prev_anchor": prev,
+                "created_at": "2026-01-01T00:00:00Z"}
+        h = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+        lines.append(_canonical({**body, "anchor_hash": h}))
+        prev = h
+    (tmp_path / "anchors.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return path
+
+
+@pytest.mark.parametrize("flag", ["--anchors", "--witness"])
+def test_many_anchors_do_not_make_the_rust_verifier_quadratic(tmp_path, flag):
+    """20,000 records x 20,000 anchor lines took ~50 s here when every anchor searched the ledger linearly; with an index it
+    is well under a second. The limit is deliberately generous (30 s) so a slow CI machine does not make this flaky:
+    it separates 'about a second' from 'minutes', not 'fast' from 'a little slower'."""
+    import time
+
+    n = 20000
+    path = _many_anchors(tmp_path, n)
+    start = time.monotonic()
+    code, out = run(path, flag, tmp_path / "anchors.jsonl", "--json")
+    elapsed = time.monotonic() - start
+    assert code == 0, out
+    assert out["status"] == "OK" and out["records"] == n and out["anchored_upto"] == n - 1
+    assert out["unanchored_tail"] == 0
+    assert elapsed < 30, f"{elapsed:.1f}s for {n} records and {n} anchors"
