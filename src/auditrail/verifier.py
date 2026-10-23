@@ -19,7 +19,7 @@ docs/spec/vectors/ and tests/test_fuzz.py hold them to the same answers.
 """
 from __future__ import annotations
 
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -198,8 +198,13 @@ def verify_legacy_v01(path) -> dict:
                       "no anchors, witness or heartbeats exist for v0.1 ledgers"]}
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
 def _fmt(epoch: int) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+    # Not time.gmtime: the C library on Windows stops at the year 3000, and the format allows up to 9999.
+    d = _EPOCH + timedelta(seconds=epoch)
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}T{d.hour:02d}:{d.minute:02d}:{d.second:02d}Z"
 
 
 def check_heartbeats(records: list[dict], max_gap_s: int) -> tuple[Optional[dict], list[dict]]:

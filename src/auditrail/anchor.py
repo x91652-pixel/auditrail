@@ -296,7 +296,7 @@ def verify_anchors(
         if not found:
             return _report("SINK_MISMATCH", f"witness does not contain anchor seq={a['seq']} (anchor_hash {a['anchor_hash'][:12]}…)", bad_seq=a["seq"])
 
-    anchored_upto = anchors[-1]["seq"] if anchors else None
+    anchored_upto = max(a["seq"] for a in anchors) if anchors else None  # the highest anchored seq (spec 6), not the last line
     tail = len(records) - (anchored_upto + 1) if anchors else len(records)
     unchecked = sorted({a["sig_alg"] for a in anchors if a.get("sig_alg") not in (None, *supported_algorithms())})
     if deferred:
@@ -374,12 +374,14 @@ class FileSink:
     def fetch_contains(self, sink_ref: str, anchor_hash: str) -> bool:
         if not self.path.exists():
             return False
-        for raw in self.path.read_text(encoding="utf-8").splitlines():
+        for raw in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
-                if json.loads(raw).get("anchor_hash") == anchor_hash:
-                    return True
+                obj = json.loads(raw)
             except ValueError:
                 continue
+            # a line that is valid JSON but not an object ([1], 7, "x") is as unusable as a malformed one
+            if isinstance(obj, dict) and obj.get("anchor_hash") == anchor_hash:
+                return True
         return False
 
 
@@ -398,14 +400,17 @@ class GitSink:
 
     def _git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         try:
-            return subprocess.run(
-                ["git", "-C", str(self.repo), *args],
-                capture_output=True, text=True, encoding="utf-8", check=check,
-            )
+            raw = subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, check=False)
         except FileNotFoundError as exc:
             raise SinkUnreachable("git executable not found") from exc
-        except subprocess.CalledProcessError as exc:
-            raise SinkUnreachable(f"git {args[0]} failed: {exc.stderr.strip()}") from exc
+        # Decoded here, not by subprocess: a repository holding bytes that are not UTF-8 must not make the reader
+        # thread fail and leave stdout as None. Undecodable bytes become U+FFFD and fail JSON parsing later.
+        result = subprocess.CompletedProcess(
+            raw.args, raw.returncode, raw.stdout.decode("utf-8", errors="replace"),
+            raw.stderr.decode("utf-8", errors="replace"))
+        if check and result.returncode != 0:
+            raise SinkUnreachable(f"git {args[0]} failed: {result.stderr.strip()}")
+        return result
 
     def _identity_args(self) -> list[str]:
         """Use the repo's own identity if set; otherwise a fixed anchor identity for this commit only."""
@@ -451,8 +456,10 @@ class GitSink:
             return False  # no commits, or the anchors file is absent at HEAD
         for raw in result.stdout.splitlines():
             try:
-                if json.loads(raw).get("anchor_hash") == anchor_hash:
-                    return True
+                obj = json.loads(raw)
             except ValueError:
                 continue
+            # a line that is valid JSON but not an object ([1], 7, "x") is as unusable as a malformed one
+            if isinstance(obj, dict) and obj.get("anchor_hash") == anchor_hash:
+                return True
         return False

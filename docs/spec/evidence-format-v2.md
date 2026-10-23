@@ -66,7 +66,7 @@ Every record has:
 
 | field | type | meaning |
 |---|---|---|
-| `format` | int | `2` (absent in v0.1 records, which verify the same way). An integer other than `2` is declined with `UNSUPPORTED_FORMAT` once the record's hash has held (6). |
+| `format` | int | `2` (absent in v0.1 records, which verify the same way). An integer other than `2` is declined with `UNSUPPORTED_FORMAT` once the record's hash has held (6). **Current behaviour of both reference implementations:** a `format` that is present but is not a JSON integer (`"2"`, `true`, `null`) is not examined at all, so such a record is accepted like one with `format` 2 when its hash and signature hold; the type is not enforced. A third implementation that treats a non-integer `format` as an error would disagree with both. |
 | `seq` | int | 0 for the first record, then +1 each; no gaps |
 | `ts` | string | when the recorder wrote it |
 | `kind` | string | `call`, `heartbeat`, `a2a_send`, `a2a_recv`, `a2a_ack`. Absent in v0.1 records, meaning `call` |
