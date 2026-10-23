@@ -73,3 +73,65 @@ def test_the_gap_listing_is_formatted_as_before(tmp_path):
     recs = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
     problem, _ = check_heartbeats(recs, 3600)
     assert problem["status"] == "HEARTBEAT_GAP" and problem["gaps"][-1]["to"] == "9999-12-31T23:59:59Z"
+
+
+# ---------------------------------------------------------------- F3: hostile content in a git witness
+import os  # noqa: E402
+
+from auditrail import Signer  # noqa: E402
+from auditrail.anchor import FileSink, GitSink, anchor_ledger  # noqa: E402
+
+
+def _git(repo, *args):
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.invalid", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t.invalid"}
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=env)
+
+
+@pytest.fixture
+def git_world(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    repo = tmp_path / "witness"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    signer = Signer.from_seed(bytes(range(32)))
+    led = Ledger(tmp_path / "l.jsonl", signer=signer, fsync=False)
+    for i in range(2):
+        led.record(agent_id="a", session_id="s", policy_version="p", policy_hash="ab" * 32, tool="t",
+                   categories=[], args={"i": i}, decision="allow")
+    anchor_ledger(led, tmp_path / "a.jsonl", sink=GitSink(repo), signer=signer)
+    return tmp_path, repo, {signer.key_id: signer.public_hex}
+
+
+def _verify(w, repo, keys):
+    return verify_all(w / "l.jsonl", public_keys=keys, anchors_path=w / "a.jsonl", sinks={"git": GitSink(repo)})
+
+
+def _replace_witness(repo, content: bytes):
+    f = repo / "anchors" / "anchors.jsonl"
+    f.write_bytes(content)
+    _git(repo, "add", "--", "anchors/anchors.jsonl")
+    _git(repo, "commit", "-q", "-m", "x")
+
+
+def test_a_clean_git_witness_is_still_ok(git_world):
+    w, repo, keys = git_world
+    assert _verify(w, repo, keys)["status"] == "OK"
+
+
+@pytest.mark.parametrize("junk", [b"[1]\n", b"7\n", b'"text"\n', b"null\n", b"\xff\xfe garbage\n", b"{not json\n"])
+def test_hostile_lines_in_the_git_witness_are_not_a_crash(git_world, junk):
+    w, repo, keys = git_world
+    good = (repo / "anchors" / "anchors.jsonl").read_bytes()
+    _replace_witness(repo, junk + good)  # unusable line first, the real anchor still there: the anchor is found
+    assert _verify(w, repo, keys)["status"] == "OK"
+    _replace_witness(repo, junk)  # only the unusable line: the anchor is not in the witness
+    res = _verify(w, repo, keys)
+    assert res["status"] == "SINK_MISMATCH", res
+
+
+def test_a_non_utf8_file_witness_is_not_a_crash(tmp_path):
+    sink = FileSink(tmp_path / "w.jsonl")
+    (tmp_path / "w.jsonl").write_bytes(b"\xff\xfe\n[1]\n")
+    assert sink.fetch_contains("file:w.jsonl", "00" * 32) is False
