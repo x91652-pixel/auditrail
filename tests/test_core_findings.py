@@ -135,3 +135,40 @@ def test_a_non_utf8_file_witness_is_not_a_crash(tmp_path):
     sink = FileSink(tmp_path / "w.jsonl")
     (tmp_path / "w.jsonl").write_bytes(b"\xff\xfe\n[1]\n")
     assert sink.fetch_contains("file:w.jsonl", "00" * 32) is False
+
+
+# ---------------------------------------------------------------- F4: anchored_upto is the highest anchored seq
+def _unordered_anchors(tmp_path, order):
+    import hashlib
+
+    led = Ledger(tmp_path / "l.jsonl", fsync=False)
+    for i in range(5):
+        led.record(agent_id="a", session_id="s", policy_version="p", tool="t", categories=[], args={"i": i},
+                   decision="allow")
+    recs = list(led)
+    prev, lines = "0" * 64, []
+    for seq in order:
+        body = {"anchor_version": 1, "seq": seq, "head_hash": recs[seq]["hash"], "prev_anchor": prev,
+                "created_at": "2026-01-01T00:00:00Z"}
+        h = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+        lines.append(_canonical({**body, "anchor_hash": h}))
+        prev = h
+    (tmp_path / "a.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return tmp_path / "l.jsonl", tmp_path / "a.jsonl"
+
+
+@pytest.mark.parametrize("order,upto", [((3, 1), 3), ((1, 3), 3), ((0, 4, 2), 4)])
+def test_the_owner_anchors_file_reports_the_highest_seq_not_the_last_line(tmp_path, order, upto):
+    ledger, anchors = _unordered_anchors(tmp_path, order)
+    res = verify_all(ledger, anchors_path=anchors)
+    assert res["status"] == "OK" and res["anchored_upto"] == upto and res["unanchored_tail"] == 4 - upto
+
+
+@pytest.mark.skipif(BINARY is None, reason="Rust verifier not built")
+@pytest.mark.parametrize("order", [(3, 1), (1, 3), (0, 4, 2)])
+@pytest.mark.parametrize("flag,pyflag", [("--anchors", "anchors_path"), ("--witness", "witness_path")])
+def test_python_and_rust_report_the_same_coverage_for_unordered_anchors(tmp_path, order, flag, pyflag):
+    ledger, anchors = _unordered_anchors(tmp_path, order)
+    py = verify_all(ledger, **{pyflag: anchors})
+    rs = rust(ledger, flag, anchors)
+    assert (py["status"], py["anchored_upto"], py["unanchored_tail"]) == (rs["status"], rs["anchored_upto"], rs["unanchored_tail"])

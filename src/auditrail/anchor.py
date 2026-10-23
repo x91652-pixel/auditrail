@@ -296,7 +296,7 @@ def verify_anchors(
         if not found:
             return _report("SINK_MISMATCH", f"witness does not contain anchor seq={a['seq']} (anchor_hash {a['anchor_hash'][:12]}…)", bad_seq=a["seq"])
 
-    anchored_upto = anchors[-1]["seq"] if anchors else None
+    anchored_upto = max(a["seq"] for a in anchors) if anchors else None  # the highest anchored seq (spec 6), not the last line
     tail = len(records) - (anchored_upto + 1) if anchors else len(records)
     unchecked = sorted({a["sig_alg"] for a in anchors if a.get("sig_alg") not in (None, *supported_algorithms())})
     if deferred:
