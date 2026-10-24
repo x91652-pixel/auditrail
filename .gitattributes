@@ -1,3 +1,17 @@
-# Conformance vectors must be byte-identical on every OS
-docs/spec/vectors/** text eol=lf
+# Text files are LF in the repository and in a checkout on every platform, so the files that go into a wheel or an sdist
+# (and the conformance vectors, whose bytes are hashed) do not depend on the machine they were checked out on.
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.rs text eol=lf
+*.json text eol=lf
 *.jsonl text eol=lf
+*.pub text eol=lf
+*.html text eol=lf
+*.in text eol=lf
+*.cfg text eol=lf
+*.txt text eol=lf
+LICENSE text eol=lf
