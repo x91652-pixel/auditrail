@@ -2,7 +2,13 @@
 
 **Tamper-evident audit trails and a "lethal trifecta" policy guard for AI agents.**
 
-Not on PyPI yet: to try it, follow the [Quickstart](#quickstart).
+```bash
+pip install auditrail        # Python 3.10 or newer; then try:  auditrail demo
+```
+
+The package contains the library and the `auditrail` command. The examples, the sample policy, the documents and the
+Rust verifier live in the [GitHub repository](https://github.com/x91652-pixel/auditrail) and are not in the package;
+links below point there. To work from a source checkout, see the [Quickstart](https://github.com/x91652-pixel/auditrail#quickstart).
 
 > **In plain words.** An AI agent can read private data, read text from untrusted places, and send things out. When all
 > three happen in one session (the "lethal trifecta"), a trick hidden in the text can make it leak the data. auditrail
@@ -18,10 +24,10 @@ Not on PyPI yet: to try it, follow the [Quickstart](#quickstart).
 > *heartbeat* is a periodic entry in which the recorder says which tools it wraps and how many calls it saw versus
 > recorded, so that, if you pass a gap limit when verifying, silent gaps in the wrapped tools show up. It covers only the tools you wrapped, does not detect prompt injection, and is not a compliance product.
 
-> **Status and what this is not.** Early (v0.3), not on PyPI, with no independent security review. The evidence
+> **Status and what this is not.** Early (v0.3), with no independent security review. The evidence
 > format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
 > agree, not yet that the format is right. It is not a certified compliance product. What it deliberately does not
-> do is listed in [SECURITY.md](SECURITY.md); read that before deciding whether it fits.
+> do is listed in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md); read that before deciding whether it fits.
 
 [![test](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml)
 ![status](https://img.shields.io/badge/status-v0.3_early-orange)
@@ -100,7 +106,7 @@ already use.
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up.
 - **Independent implementation of the verifier.** `verifier/` is a separate Rust program, written from the
-  [public format spec](docs/spec/evidence-format-v2.md) and tested against the same
+  [public format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md) and tested against the same
   conformance vectors as the Python code. One offline binary, no network. It was written by the
   same author as the Python code, so it checks that the two agree, not yet that the format is right.
 - **Lethal-trifecta policy by workflow.** A call that would complete
@@ -115,13 +121,13 @@ already use.
 
 What it deliberately does **not** do -- detect prompt injection, prove that
 unwrapped tools stayed quiet, protect you if the recorder key is stolen, or certify
-compliance -- is in [SECURITY.md](SECURITY.md). Read that before deciding whether
+compliance -- is in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md). Read that before deciding whether
 it fits your threat model.
 
 ## Stricter modes and behavior changes
 
 ```python
-policy = PolicyEngine.from_yaml("policies/example_policy.yaml", strict=True)
+policy = PolicyEngine.from_yaml("policies/example_policy.yaml", strict=True)  # the sample policy is in the GitHub repository, not the package
 guard = Guard(policy, ledger)           # a wrapped tool with no category is refused and recorded as `unclassified_tool`
 replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by every process on this host
 ```
@@ -147,10 +153,10 @@ replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by ev
   check.
 - **Behavior change:** the same tool labelled differently by two agent sections raises `PolicyError` when it is
   wrapped; give it one label set.
-- **Behavior change (verifiers, Python and Rust):** two new statuses, `UNSUPPORTED_ALGORITHM` (inconclusive, exit 1: the trusted key is registered as an algorithm the verifier cannot check; a `.pub` file cannot express that, so file input gets `BAD_SIGNATURE` "algorithm mismatch" for any record that names an algorithm other than its Ed25519 key's) and `UNSUPPORTED_FORMAT` (`format` is an integer other than 2). An optional `sig_alg` member names the algorithm; absent means Ed25519 and Ed25519 is always written by omission, so existing ledgers are unchanged. An explicit `"sig_alg":"ed25519"` is rejected. See [the format spec](docs/spec/evidence-format-v2.md).
+- **Behavior change (verifiers, Python and Rust):** two new statuses, `UNSUPPORTED_ALGORITHM` (inconclusive, exit 1: the trusted key is registered as an algorithm the verifier cannot check; a `.pub` file cannot express that, so file input gets `BAD_SIGNATURE` "algorithm mismatch" for any record that names an algorithm other than its Ed25519 key's) and `UNSUPPORTED_FORMAT` (`format` is an integer other than 2). An optional `sig_alg` member names the algorithm; absent means Ed25519 and Ed25519 is always written by omission, so existing ledgers are unchanged. An explicit `"sig_alg":"ed25519"` is rejected. See [the format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md).
 
 These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
-see "Opt-in hardening" in [SECURITY.md](SECURITY.md) for what each one does not cover.
+see "Opt-in hardening" in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md) for what each one does not cover.
 
 ## Evidence that can be checked without trusting the operator
 
@@ -161,7 +167,7 @@ count) -- so the operator cannot later take the key and re-sign a rewritten hist
 (a key that signs on request from a KMS/TPM would also do, but that is not provided: you would write the signer
 yourself); otherwise only an independent witness limits what the operator can rewrite; (2) the checker gets the
 recorder's **public key by a route the operator cannot alter**; and (3) the witness copy is held somewhere the operator
-cannot rewrite. Without those, see the limits in [SECURITY.md](SECURITY.md).
+cannot rewrite. Without those, see the limits in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md).
 
 ```bash
 # 1. a recorder key, kept where the agent process cannot read it
@@ -169,6 +175,7 @@ auditrail keygen --out keys/recorder
 
 # 2. run the recorder as its own process (ideally its own OS user or host);
 #    it holds the key and the ledger, and agents can only append through a socket
+#    (policies/example_policy.yaml is the sample policy in the GitHub repository, not in the package)
 export AUDITRAIL_RECORDER_TOKEN=change-me
 auditrail recorder --ledger evidence.jsonl --key keys/recorder.key \
     --policy policies/example_policy.yaml --anchors anchors.jsonl \
@@ -197,22 +204,26 @@ given, no witness, no heartbeat limit, records after the last anchor).
 
 ### Getting the standalone verifier
 
-`auditrail-verify` is a single static file written in Rust. **No release has been published yet**, so for now you build
-it:
+`auditrail-verify` is a single static file written in Rust. The PyPI package does not contain it or its source. Pre-built
+files, when a release provides them, are on the project's
+[GitHub Releases page](https://github.com/x91652-pixel/auditrail/releases); if there is no file for your version or
+platform, build it from source:
 
+- Get the source: `git clone https://github.com/x91652-pixel/auditrail`, then work in its `verifier/` folder
+  ([on GitHub](https://github.com/x91652-pixel/auditrail/tree/main/verifier)).
 - Linux: `sudo apt install cargo` (or install Rust with rustup); Windows: install [rustup](https://rustup.rs/) and the
   Visual Studio C++ build tools it asks for; macOS: rustup.
-- Then, from the repository root: `cd verifier && cargo build --locked --release`.
+- Then: `cd verifier && cargo build --locked --release`.
 - The binary is `verifier/target/release/auditrail-verify` (`.exe` on Windows); check it with
   `verifier/target/release/auditrail-verify --version`.
 
-Once a release exists (pushing a tag `v*` runs [`release.yml`](.github/workflows/release.yml), which builds it for
-Linux x86_64, Windows x86_64 and macOS Apple silicon and Intel, runs the conformance vectors against each native
-build, and publishes the files with a `SHA256SUMS` list and GitHub build-provenance attestations), the download steps
-will be as below. **They do not work today, because `v0.3.0` does not exist.**
+A release is built by the [release workflow](https://github.com/x91652-pixel/auditrail/blob/main/.github/workflows/release.yml)
+when a tag `v*` is pushed: it builds Linux x86_64, Windows x86_64 and macOS (Apple silicon and Intel) files, runs the
+conformance vectors against each native build, and publishes them with a `SHA256SUMS` list and GitHub build-provenance
+attestations. To use a downloaded file (names as listed on the release you picked; `<tag>` is that release's tag):
 
 ```bash
-gh release download v0.3.0 --repo x91652-pixel/auditrail --pattern 'auditrail-verify-linux-x86_64' --pattern SHA256SUMS
+gh release download <tag> --repo x91652-pixel/auditrail --pattern 'auditrail-verify-linux-x86_64' --pattern SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 gh attestation verify auditrail-verify-linux-x86_64 --repo x91652-pixel/auditrail   # which workflow built it
 chmod +x auditrail-verify-linux-x86_64 && ./auditrail-verify-linux-x86_64 --version
@@ -231,7 +242,7 @@ Intel macOS binary is cross-compiled and is not executed in CI.
 the whole ledger, or cuts off its tail, still passes it. Anchoring periodically
 records the chain head (sequence number and hash, no tool arguments or results)
 and publishes it to a witness outside the ledger owner's sole control. The full
-current specification, including the signed (v2) anchors, is [docs/spec/evidence-format-v2.md](docs/spec/evidence-format-v2.md).
+current specification, including the signed (v2) anchors, is [docs/spec/evidence-format-v2.md](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md).
 
 ```bash
 # record the current head; with --push, also push the witness commit
@@ -263,7 +274,7 @@ written at all; a compromised host making changes in real time; or a witness and
 the owner acting together. The git witness is only as strong as the place the
 repository lives. A repository the owner controls can be rewritten by that owner,
 so anchor hashes should also be copied to a third party periodically. Anchors made
-with `--key` are signed (anchor_version 2, see [the format spec](docs/spec/evidence-format-v2.md));
+with `--key` are signed (anchor_version 2, see [the format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md));
 Merkle proofs and RFC 3161 timestamps are not implemented yet.
 
 ## A readable report
@@ -324,6 +335,32 @@ Python packages kept just for this project): on recent Debian-based distribution
 Ubuntu 26.04) pip can refuse a system-wide install with "externally-managed-environment"
 ([PEP 668](https://peps.python.org/pep-0668/)); this is from our own test run, not a statement about every Ubuntu version.
 
+### From PyPI
+
+```bash
+# Linux / macOS (on Ubuntu first: sudo apt install python3-venv python3-pip)
+python3 -m venv .venv && . .venv/bin/activate
+pip install auditrail
+auditrail demo                   # allow, deny, a trifecta block, tamper detection; the last line names the ledger file
+auditrail verify <the path printed on that last line>
+auditrail keygen --out keys/recorder        # a recorder key pair; see "Evidence that can be checked" above
+```
+
+```powershell
+# Windows PowerShell -- no activation needed
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install auditrail
+.venv\Scripts\auditrail.exe demo
+.venv\Scripts\auditrail.exe verify <the path printed on that last line>
+```
+
+`auditrail demo` makes one real HTTP request (see below) and writes an unsigned ledger to your temporary directory. The
+"Wrap a tool function" file further down also works with only the PyPI package. The commands that start with
+`python -m examples...`, the sample policy `policies/example_policy.yaml`, `pip install -e ".[dev]"` and the tests need
+the source checkout below: the package does not contain `examples`, `policies`, `docs`, `tests` or the Rust verifier.
+
+### From source (a git checkout)
+
 ```bash
 # Linux / macOS (on Ubuntu first: sudo apt install git python3-venv python3-pip)
 git clone https://github.com/x91652-pixel/auditrail
@@ -349,7 +386,7 @@ activating, use `.venv/bin/python` and `.venv/bin/auditrail`; on Windows `.venv\
 `.venv\Scripts\auditrail.exe`; a system `python3` does not see the packages) and `auditrail` is the command `pip install`
 created in it.
 
-Two demos, which write to different places:
+Two demos, which write to different places (the first needs the checkout; the second also works from the PyPI package):
 
 ```bash
 # 1. the repository's example: writes examples/demo_ledger.jsonl
@@ -378,7 +415,7 @@ rejected forged or replayed one), and tamper detection.
 The demos write an unsigned ledger (`*.jsonl` is git-ignored, so the file exists only after you run the demo).
 `verify` therefore reports what it did **not** check: signatures, anchors and heartbeats.
 
-Wrap a tool function (run from any directory once the package is installed; this is the whole file):
+Wrap a tool function (run from any directory once the package is installed, from PyPI or from source; this is the whole file):
 
 ```python
 from auditrail import Guard, Ledger, PolicyEngine
@@ -401,14 +438,14 @@ print(read_resume(session, "cand-001"))        # policy-checked and logged
 ```
 
 Then `auditrail verify evidence.jsonl` (`.venv\Scripts\auditrail.exe verify evidence.jsonl` on Windows without
-activating). See [`examples/mock_demo.py`](examples/mock_demo.py) for the full walkthrough
-(including the trifecta-block and tamper-detection scenarios), [`policies/example_policy.yaml`](policies/example_policy.yaml)
-for a policy file, and [`examples/real_agent_demo.py`](examples/real_agent_demo.py) for a live example with Claude
+activating). See [`examples/mock_demo.py`](https://github.com/x91652-pixel/auditrail/blob/main/examples/mock_demo.py) for the full walkthrough
+(including the trifecta-block and tamper-detection scenarios), [`policies/example_policy.yaml`](https://github.com/x91652-pixel/auditrail/blob/main/policies/example_policy.yaml)
+for a policy file, and [`examples/real_agent_demo.py`](https://github.com/x91652-pixel/auditrail/blob/main/examples/real_agent_demo.py) for a live example with Claude
 doing real tool-use (`ANTHROPIC_API_KEY` required).
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the full data-flow
+See [docs/architecture.md](https://github.com/x91652-pixel/auditrail/blob/main/docs/architecture.md) for the full data-flow
 diagram and the reasoning behind two specific design choices: why the
 policy engine reasons about tool *categories* rather than tool identities,
 and why the ledger stores argument/result digests rather than raw payloads.
@@ -429,11 +466,11 @@ narrow and meant to compose with things that already exist:
 
 ## Status
 
-v0.3 -- early, unreleased on PyPI, as far as we know not yet used in production, no
+v0.3 -- early, as far as we know not yet used in production, no
 independent security review. The format is a draft: expect changes until a second
 team has implemented it. Issues, and especially "this
 broke when I tried it against a real agent" reports, are exactly what
-this stage needs. See [ROADMAP.md](ROADMAP.md).
+this stage needs. See [ROADMAP.md](https://github.com/x91652-pixel/auditrail/blob/main/ROADMAP.md).
 
 ## Development
 
@@ -445,7 +482,7 @@ pytest -v
 All 931 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
-(runs every [conformance vector](docs/spec/vectors) through the independent verifier) and
+(runs every [conformance vector](https://github.com/x91652-pixel/auditrail/tree/main/docs/spec/vectors) through the independent verifier) and
 `cd dashboard && cargo test`. Python tests that compare against the Rust verifier are
 skipped until you run `cd verifier && cargo build --locked --release`.
 
@@ -462,14 +499,14 @@ python -m examples.logistics_sim.run
 ```
 
 Results and the reasoning behind each scenario are in
-[docs/simulation.md](docs/simulation.md).
+[docs/simulation.md](https://github.com/x91652-pixel/auditrail/blob/main/docs/simulation.md).
 
 ## Contributing
 
-Issues and PRs welcome. Please read [SECURITY.md](SECURITY.md) first --
+Issues and PRs welcome. Please read [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md) first --
 if you're adding a feature, say explicitly in the PR description which
 row of that table it changes.
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](https://github.com/x91652-pixel/auditrail/blob/main/LICENSE)
