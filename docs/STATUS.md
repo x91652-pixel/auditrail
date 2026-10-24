@@ -338,6 +338,6 @@ git diff --stat
 - 兩個驗證器出自同一作者；一致性測試只能證明「兩份實作彼此一致」，不能證明「規格正確」。
 - 測試通過不代表真實部署中金鑰與見證放對了地方。
 
-### CI：verifier job 的 `cargo test`（建議，未套用）
+### CI：verifier job 的 `cargo test`（已套用，待 PR 的 CI 實跑確認）
 
-`.github/workflows/test.yml` 的 verifier job 以除錯模式跑 `cargo test --locked`，兩個 robust 測試約 7 分鐘。改成 `--release` 不是無風險的等價替換：發行模式預設關閉整數溢位檢查與 `debug_assert!`，原本會 panic 的溢位會變成靜默回繞，`robust` 測試找「不要 panic」的能力因此改變。更保守的作法：在 `verifier/Cargo.toml` 加 `[profile.test] opt-level = 3`，讓測試以最佳化編譯，但溢位檢查與 `debug_assert!` 維持開啟、測試內容與覆蓋不變。本機實測（`CARGO_PROFILE_TEST_OPT_LEVEL=3 cargo test --locked`）：robust 測試 5.3 秒，整個指令 17 秒。因為這會動 `Cargo.toml`（不在這次允許的檔案內），且 CI 在本機無法驗證，所以只寫建議，由 PR 的 CI 實跑確認後再套用。
+`verifier/Cargo.toml` 加了 `[profile.test] opt-level = 3`：測試以最佳化編譯，整數溢位檢查與 `debug_assert!` 維持開啟，測試內容與覆蓋不變（不改成 `--release`，因為發行模式預設關閉溢位檢查）。本機實測（Windows）：`cargo test --locked` 的 robust 測試 **276.6 秒 → 5.9 秒**，整個指令 **4 分 39 秒 → 15 秒**。`cargo build --locked --release` 與 `cargo test --locked --release` 不受影響：release 二進位的 sha256 前後相同（86ebd46d…）。CI 上的耗時由 PR 的 CI 實跑確認（本機無法驗證）。
