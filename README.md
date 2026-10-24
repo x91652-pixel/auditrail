@@ -18,13 +18,13 @@ Not on PyPI yet: to try it, follow the [Quickstart](#quickstart).
 > *heartbeat* is a periodic entry in which the recorder says which tools it wraps and how many calls it saw versus
 > recorded, so that, if you pass a gap limit when verifying, silent gaps in the wrapped tools show up. It covers only the tools you wrapped, does not detect prompt injection, and is not a compliance product.
 
-> **Status and what this is not.** Early (v0.2), not on PyPI, with no independent security review. The evidence
+> **Status and what this is not.** Early (v0.3), not on PyPI, with no independent security review. The evidence
 > format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
 > agree, not yet that the format is right. It is not a certified compliance product. What it deliberately does not
 > do is listed in [SECURITY.md](SECURITY.md); read that before deciding whether it fits.
 
 [![test](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml)
-![status](https://img.shields.io/badge/status-v0.2_early-orange)
+![status](https://img.shields.io/badge/status-v0.3_early-orange)
 ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 ## The problem
@@ -82,7 +82,7 @@ wrapped tools were allowed or refused (with the reason, for a refusal), and whet
 key the operator cannot reach and a witness copy it does not control). The ledger stores digests of arguments and
 results, not what the agent "saw".
 
-## What it actually does (v0.2)
+## What it actually does (v0.3)
 
 auditrail lets someone who does **not** trust you
 check, given the recorder's public key and a witness copy, what an agent did through the tools you wrapped. It is a library plus a standalone verifier, not a
@@ -209,10 +209,10 @@ it:
 Once a release exists (pushing a tag `v*` runs [`release.yml`](.github/workflows/release.yml), which builds it for
 Linux x86_64, Windows x86_64 and macOS Apple silicon and Intel, runs the conformance vectors against each native
 build, and publishes the files with a `SHA256SUMS` list and GitHub build-provenance attestations), the download steps
-will be as below. **They do not work today, because `v0.2.0` does not exist.**
+will be as below. **They do not work today, because `v0.3.0` does not exist.**
 
 ```bash
-gh release download v0.2.0 --repo x91652-pixel/auditrail --pattern 'auditrail-verify-linux-x86_64' --pattern SHA256SUMS
+gh release download v0.3.0 --repo x91652-pixel/auditrail --pattern 'auditrail-verify-linux-x86_64' --pattern SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 gh attestation verify auditrail-verify-linux-x86_64 --repo x91652-pixel/auditrail   # which workflow built it
 chmod +x auditrail-verify-linux-x86_64 && ./auditrail-verify-linux-x86_64 --version
@@ -429,7 +429,7 @@ narrow and meant to compose with things that already exist:
 
 ## Status
 
-v0.2 -- early, unreleased on PyPI, as far as we know not yet used in production, no
+v0.3 -- early, unreleased on PyPI, as far as we know not yet used in production, no
 independent security review. The format is a draft: expect changes until a second
 team has implemented it. Issues, and especially "this
 broke when I tried it against a real agent" reports, are exactly what
