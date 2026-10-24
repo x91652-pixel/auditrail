@@ -24,9 +24,11 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
@@ -147,8 +149,14 @@ class TamperError(Exception):
     """Raised by verify() consumers that want an exception instead of a bool."""
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
 def _utc_ts(epoch: float) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+    """UTC time as `YYYY-MM-DDTHH:MM:SSZ` (fractions of a second dropped), for years 1970-9999 on every platform.
+    Not time.gmtime: the C library on Windows stops at the year 3000."""
+    d = _EPOCH + timedelta(seconds=math.floor(epoch))
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}T{d.hour:02d}:{d.minute:02d}:{d.second:02d}Z"
 
 
 @contextlib.contextmanager

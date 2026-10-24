@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 from . import _strict
 from ._strict import is_int
 from .keys import DEFAULT_ALG, TAG_ANCHOR, Signer, key_algorithm, supported_algorithms, verify_with
-from .ledger import GENESIS_HASH, Ledger, _canonical
+from .ledger import GENESIS_HASH, Ledger, _canonical, _utc_ts
 
 ANCHOR_VERSION = 1  # unsigned
 SIGNED_ANCHOR_VERSION = 2
@@ -44,7 +44,7 @@ class SinkUnreachable(Exception):
 
 
 def _utc_now(clock: Callable[[], float] = time.time) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
+    return _utc_ts(clock())
 
 
 def _anchor_hash(body: dict) -> str:
@@ -377,7 +377,7 @@ class FileSink:
         for raw in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 obj = json.loads(raw)
-            except ValueError:
+            except (ValueError, RecursionError):  # malformed, or nested too deeply to parse: unusable, skip it
                 continue
             # a line that is valid JSON but not an object ([1], 7, "x") is as unusable as a malformed one
             if isinstance(obj, dict) and obj.get("anchor_hash") == anchor_hash:
@@ -457,7 +457,7 @@ class GitSink:
         for raw in result.stdout.splitlines():
             try:
                 obj = json.loads(raw)
-            except ValueError:
+            except (ValueError, RecursionError):  # malformed, or nested too deeply to parse: unusable, skip it
                 continue
             # a line that is valid JSON but not an object ([1], 7, "x") is as unusable as a malformed one
             if isinstance(obj, dict) and obj.get("anchor_hash") == anchor_hash:

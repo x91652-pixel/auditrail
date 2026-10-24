@@ -158,3 +158,33 @@ def test_many_anchors_do_not_make_the_rust_verifier_quadratic(tmp_path, flag):
     assert out["status"] == "OK" and out["records"] == n and out["anchored_upto"] == n - 1
     assert out["unanchored_tail"] == 0
     assert elapsed < 30, f"{elapsed:.1f}s for {n} records and {n} anchors"
+
+
+def test_many_distinct_algorithm_tokens_do_not_make_the_rust_verifier_quadratic(tmp_path):
+    """Version 3 anchors may each name a different `sig_alg`; without keys they pass the line checks. Remembering the
+    distinct tokens must not rescan a list per line. 100,000 lines took about 15 s here before the fix; the
+    limit (8 s) is generous (the fixed code needs about a second) so a slow CI machine does not make this flaky."""
+    import hashlib
+    import time
+
+    from auditrail.ledger import _canonical
+
+    path = tmp_path / "l.jsonl"
+    led = Ledger(path, fsync=False)
+    led.record(agent_id="a", session_id="s", policy_version="v", tool="t", categories=[], args={}, decision="allow")
+    head = list(led)[0]["hash"]
+    prev, lines, n = "0" * 64, [], 100000
+    for i in range(n):
+        body = {"anchor_version": 3, "seq": 0, "head_hash": head, "prev_anchor": prev,
+                "created_at": "2026-01-01T00:00:00Z", "key_id": "0" * 16, "sig_alg": f"alg-{i}"}
+        h = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+        lines.append(_canonical({**body, "anchor_hash": h, "sig": "0" * 128}))
+        prev = h
+    (tmp_path / "w.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    start = time.monotonic()
+    code, out = run(path, "--witness", tmp_path / "w.jsonl", "--json")
+    elapsed = time.monotonic() - start
+    assert out["status"] in ("OK", "UNSUPPORTED_ALGORITHM"), out
+    assert len(out["unchecked_algorithms"]) == n
+    assert out["unchecked_algorithms"] == sorted(out["unchecked_algorithms"])
+    assert elapsed < 8, f"{elapsed:.1f}s for {n} distinct algorithm tokens"

@@ -17,6 +17,7 @@ the check says it could not check; it never reports "fine" in that case.
 """
 from __future__ import annotations
 
+import locale
 import os
 import re
 import subprocess
@@ -27,6 +28,14 @@ from typing import NamedTuple, Union
 # FileSystemRights bits
 _READ_DATA = 0x1 | 0x20  # ReadData, ExecuteFile
 _WRITE = 0x2 | 0x4 | 0x10 | 0x40 | 0x10000 | 0x40000 | 0x80000  # write/append/EA/delete-child/delete/change perms/owner
+# Generic rights (GenericRead 0x80000000, GenericWrite 0x40000000, GenericAll 0x10000000). Windows normally maps them to
+# specific rights when it stores an ACE, but a mask that still carries them is not something to wave through: an
+# Everyone entry with a generic read/write/all bit is treated as granting that access. (Via .NET's signed enum,
+# GenericRead can arrive as a negative number; Python's & works on it unchanged.)
+_GENERIC_READ = 0x80000000
+_GENERIC_WRITE = 0x40000000
+_GENERIC_ALL = 0x10000000
+_GENERIC_EXECUTE = 0x20000000  # counted like ExecuteFile: only for a secret
 
 _BROAD_SIDS = {
     "S-1-1-0": "Everyone",
@@ -78,6 +87,37 @@ def clean_stderr(text, limit: int = 300) -> str:
     text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", " ", str(text))  # colour codes
     text = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", text)
     return re.sub(r" {2,}", " ", text).strip()[:limit]
+
+
+class NonAsciiOutput(ValueError):
+    """The listing contained a byte >= 0x80 (or a non-ASCII character)."""
+
+
+def _ascii_listing(data) -> str:
+    """The ACL listing, strictly. The script prints only SIDs, Allow/Deny and numbers, so every byte is ASCII. A byte
+    >= 0x80 means something other than that script's own output; decoding it leniently could turn part of a SID
+    into U+FFFD and make an Everyone entry vanish from the parse, so the whole listing is refused instead.
+    None (no output) is ''."""
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        try:
+            return data.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise NonAsciiOutput(f"byte 0x{data[exc.start]:02x} at offset {exc.start}") from exc
+    if not data.isascii():
+        raise NonAsciiOutput("non-ASCII characters")
+    return data
+
+
+def _decoded(data) -> str:
+    """Text from what a subprocess returned: bytes are decoded with the locale's encoding and undecodable bytes become
+    U+FFFD (a SID, a keyword or a number is ASCII, and a name that cannot be decoded is not needed); None is ''."""
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode(locale.getpreferredencoding(False) or "utf-8", errors="replace")
+    return data
 
 
 def _failure(p, why: str, stderr) -> "Finding":
@@ -137,7 +177,7 @@ def unparsed_broad_lines(acl_lines) -> list:
 
 def windows_findings(acl_lines: list[str], role: str) -> list[str]:
     """Findings from `SID|Allow/Deny|rights` lines (see _PS_SCRIPT)."""
-    mask = _READ_DATA | _WRITE if role == "secret" else _WRITE
+    mask = (_READ_DATA | _WRITE | _GENERIC_READ | _GENERIC_WRITE | _GENERIC_ALL | _GENERIC_EXECUTE) if role == "secret"         else (_WRITE | _GENERIC_WRITE | _GENERIC_ALL)
     found: list[str] = []
     for sid, kind, bits in parse_acl_lines(acl_lines):
         if kind != "Allow" or sid not in _BROAD_SIDS:
@@ -178,17 +218,22 @@ def permission_findings(path: Union[str, os.PathLike], role: str) -> list[Findin
         out = subprocess.run(
             [powershell_executable(), "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
             env=powershell_environment(str(p)),
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, timeout=30,  # bytes: a decoding failure must not kill subprocess's reader thread
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return [Finding("unchecked", f"{p}: permissions NOT CHECKED ({type(exc).__name__}; is PowerShell available?)")]
+    stderr = _decoded(out.stderr)  # only ever shown in a message, never used to decide anything
     if out.returncode != 0:
-        return [_failure(p, f"PowerShell exited {out.returncode}", out.stderr)]
-    lines = out.stdout.splitlines()
+        return [_failure(p, f"PowerShell exited {out.returncode}", stderr)]
+    try:
+        stdout = _ascii_listing(out.stdout)
+    except NonAsciiOutput as exc:
+        return [_failure(p, f"PowerShell printed output that is not plain ASCII ({exc}); the listing is not trusted", stderr)]
+    lines = stdout.splitlines()
     if not parse_acl_lines(lines):
         # exit code 0 but nothing we can read: that is "could not check", never "nothing found". Every
         # file has at least one ACE, so an empty result means the listing did not work.
-        return [_failure(p, "PowerShell succeeded but returned no parseable access-control entries", out.stderr)]
+        return [_failure(p, "PowerShell succeeded but returned no parseable access-control entries", stderr)]
     odd = unparsed_broad_lines(lines)
     if odd:
         shown = "; ".join(repr(x[:80]) for x in odd[:3])

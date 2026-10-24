@@ -39,7 +39,7 @@ CI（GitHub Actions）在 PR #1 / #2 / #3 合併前全部成功；`verifier` job
 
 | 指令 | 結果 |
 |---|---|
-| `pytest -q -rs` | **832 通過、0 失敗、4 跳過**（`test_sink_robustness.py:64`（需要非 root 的 POSIX）、`test_phase1_defaults.py:361` 與 `test_t010b_recorder.py:108`，各只在 POSIX 執行；`test_report_r4.py:58` 需要 POSIX 的唯讀目錄語意；另有只在 Windows 執行的 ACL 測試，在 POSIX 上會跳過）；共收集 836 個 |
+| `pytest -q -rs` | **923 通過、0 失敗、4 跳過**（條件：Windows、已建置 Rust 執行檔、本機 `pytest -q -rs`；860 是由收集數 927 減 4 個已知跳過推算，未逐次實測。CI 的 Python job 不建置 Rust，所以 PR #9 的 CI 日誌顯示 Windows 712 通過／124 跳過、Ubuntu 678 通過／158 跳過（合計 836 = 當時的收集數），之後新增的測試會改變這些數字）**（`test_sink_robustness.py:64`（需要非 root 的 POSIX）、`test_phase1_defaults.py:361` 與 `test_t010b_recorder.py:108`，各只在 POSIX 執行；`test_report_r4.py:58` 需要 POSIX 的唯讀目錄語意；另有只在 Windows 執行的 ACL 測試，在 POSIX 上會跳過）；共收集 927 個 |
 | `cd verifier && cargo test --locked --release` | robust 2 通過、vectors 2 通過 |
 
 沒有 Rust 執行檔時，`test_policy_hash.py` 的 9 個 Rust 對照測試會**明確 skip**（`pytest.skip`），不再算通過。Linux 與 Python 3.10 從未在本機執行。
@@ -337,3 +337,7 @@ git diff --stat
 - Linux / macOS 上的檔案鎖（`fcntl`）、`GitSink` 真實 push 路徑沒有被本次環境測到。
 - 兩個驗證器出自同一作者；一致性測試只能證明「兩份實作彼此一致」，不能證明「規格正確」。
 - 測試通過不代表真實部署中金鑰與見證放對了地方。
+
+### CI：verifier job 的 `cargo test`（建議，未套用）
+
+`.github/workflows/test.yml` 的 verifier job 以除錯模式跑 `cargo test --locked`，兩個 robust 測試約 7 分鐘。改成 `--release` 不是無風險的等價替換：發行模式預設關閉整數溢位檢查與 `debug_assert!`，原本會 panic 的溢位會變成靜默回繞，`robust` 測試找「不要 panic」的能力因此改變。更保守的作法：在 `verifier/Cargo.toml` 加 `[profile.test] opt-level = 3`，讓測試以最佳化編譯，但溢位檢查與 `debug_assert!` 維持開啟、測試內容與覆蓋不變。本機實測（`CARGO_PROFILE_TEST_OPT_LEVEL=3 cargo test --locked`）：robust 測試 5.3 秒，整個指令 17 秒。因為這會動 `Cargo.toml`（不在這次允許的檔案內），且 CI 在本機無法驗證，所以只寫建議，由 PR 的 CI 實跑確認後再套用。

@@ -391,7 +391,9 @@ fn anchor_lines(bytes: &[u8]) -> (Vec<Map<String, Value>>, Option<String>) {
 /// The owner's anchors file: every line valid and chained first (spec check 3), then compared to the ledger.
 fn note_unchecked_alg(a: &Map<String, Value>, unchecked: &mut Vec<String>) {
     if let Some(alg) = s(a, "sig_alg") {
-        if !SUPPORTED_ALGS.contains(&alg) && !unchecked.iter().any(|u| u == alg) {
+        // No duplicate scan here: the list is sorted and de-duplicated once at the end (verify_bytes), so a file of
+        // n anchors naming n different algorithms costs n pushes, not n*n comparisons.
+        if !SUPPORTED_ALGS.contains(&alg) {
             unchecked.push(alg.to_string());
         }
     }
