@@ -67,34 +67,56 @@ jobs:
 
   package:
     # Builds the distribution files and checks them. It never uploads anything and uses no secrets.
-    runs-on: ubuntu-latest
+    # Runs on Windows as well: that runner checks files out with autocrlf=true, which is how CRLF line ends once
+    # got into a build.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: no CRLF in the index or in the checkout
+        run: |
+          git ls-files --eol > "$RUNNER_TEMP/eol.txt"
+          if grep -E "i/crlf|w/crlf" "$RUNNER_TEMP/eol.txt"; then
+            echo "files with CRLF line ends (see above)"; exit 1
+          fi
       - run: python -m pip install --upgrade pip build twine
       - run: python -m build
       - run: twine check dist/*
       - name: install the wheel in a fresh environment, away from the source tree
         run: |
           python -m venv "$RUNNER_TEMP/wheel-venv"
-          "$RUNNER_TEMP/wheel-venv/bin/pip" install dist/*.whl
+          if [ -d "$RUNNER_TEMP/wheel-venv/Scripts" ]; then BIN="$RUNNER_TEMP/wheel-venv/Scripts"; else BIN="$RUNNER_TEMP/wheel-venv/bin"; fi
+          "$BIN/python" -m pip install dist/*.whl
           cd "$RUNNER_TEMP"
-          "$RUNNER_TEMP/wheel-venv/bin/auditrail" --help
+          "$BIN/auditrail" --help
           V="$GITHUB_WORKSPACE/docs/spec/vectors/01-valid-signed-witnessed"
-          "$RUNNER_TEMP/wheel-venv/bin/auditrail" verify "$V/ledger.jsonl" --pubkey "$V/recorder.pub" --witness-file "$V/witness.jsonl" --max-gap 60
-      - name: the wheel carries LICENSE and no tests, keys or binaries
+          "$BIN/auditrail" verify "$V/ledger.jsonl" --pubkey "$V/recorder.pub" --witness-file "$V/witness.jsonl" --max-gap 60
+      - name: the files carry LICENSE and no tests, keys or binaries, and no CRLF in source or text members
         run: |
           python - <<'PY'
-          import glob, re, zipfile
-          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          import glob, re, tarfile, zipfile
+          z = zipfile.ZipFile(glob.glob("dist/*.whl")[0])
+          t = tarfile.open(glob.glob("dist/*.tar.gz")[0])
+          names = z.namelist()
           assert any(n.endswith("licenses/LICENSE") for n in names), names
           assert any(n.endswith("auditrail/_limits.py") for n in names)
-          bad = [n for n in names if re.search(r"tests/|\.key$|\.pub$|\.exe$|\.jsonl$", n)]
+          bad = [n for n in names + t.getnames() if re.search(r"tests/|\.key$|\.pub$|\.exe$|\.jsonl$", n)]
           assert not bad, bad
-          z = zipfile.ZipFile(glob.glob("dist/*.whl")[0])
-          crlf = [n for n in names if n.endswith((".py", ".md")) and b"\r\n" in z.read(n)]
+          # .py, .md and .toml members of the wheel and the sdist must be LF. The generated METADATA and PKG-INFO are
+          # not checked: setuptools writes them with the platform's line ends on Windows, which is known behaviour and
+          # not part of the sources.
+          text = (".py", ".md", ".toml")
+          crlf = [("wheel", n) for n in names if n.endswith(text) and b"\r\n" in z.read(n)]
+          crlf += [("sdist", m.name) for m in t.getmembers() if m.isfile() and m.name.endswith(text)
+                   and b"\r\n" in t.extractfile(m).read()]
           assert not crlf, crlf
-          print(len(names), "files in the wheel")
+          print(len(names), "files in the wheel;", len(t.getnames()), "in the sdist")
           PY
