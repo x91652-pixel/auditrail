@@ -93,5 +93,8 @@ jobs:
           assert any(n.endswith("auditrail/_limits.py") for n in names)
           bad = [n for n in names if re.search(r"tests/|\.key$|\.pub$|\.exe$|\.jsonl$", n)]
           assert not bad, bad
+          z = zipfile.ZipFile(glob.glob("dist/*.whl")[0])
+          crlf = [n for n in names if n.endswith((".py", ".md")) and b"\r\n" in z.read(n)]
+          assert not crlf, crlf
           print(len(names), "files in the wheel")
           PY
