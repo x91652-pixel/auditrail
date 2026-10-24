@@ -7,7 +7,7 @@ name = "auditrail"
 version = "0.2.0"
 description = "Verifiable evidence for AI agents: signed, anchored audit trails and a lethal-trifecta policy guard."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "auditrail contributors" }]
 keywords = ["ai-agents", "audit", "security", "mcp", "prompt-injection", "compliance"]
@@ -16,6 +16,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Security",
 ]
 dependencies = [

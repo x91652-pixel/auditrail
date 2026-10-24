@@ -319,7 +319,7 @@ A report is easy to over-read. The numbered points below are what it does not sa
 
 ## Quickstart
 
-Python 3.10 or newer is what CI tests (`pyproject.toml` allows 3.9, untested). Work in a virtual environment (a folder of
+Python 3.10 or newer is required (CI tests 3.10 and 3.12). Work in a virtual environment (a folder of
 Python packages kept just for this project): on recent Debian-based distributions (we saw it on
 Ubuntu 26.04) pip can refuse a system-wide install with "externally-managed-environment"
 ([PEP 668](https://peps.python.org/pep-0668/)); this is from our own test run, not a statement about every Ubuntu version.
