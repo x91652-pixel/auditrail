@@ -1,6 +1,6 @@
 [package]
 name = "auditrail-verify"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Independent offline verifier for auditrail evidence ledgers (format v2). Does not call or import the Python implementation."
 license = "Apache-2.0"
@@ -14,3 +14,8 @@ hex = "0.4"
 [profile.release]
 opt-level = 3
 lto = true
+
+# Tests are compiled with optimisations (the robust tests took ~4.6 minutes unoptimised). Overflow checks and
+# debug_assert! stay ON in the test profile, so the same assertions run; only the speed changes.
+[profile.test]
+opt-level = 3

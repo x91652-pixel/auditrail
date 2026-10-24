@@ -1,0 +1,4 @@
+# The source distribution carries the package, README and LICENSE only. Tests need the examples, the spec vectors and
+# the Rust sources, none of which are shipped, so the test files would not run from an sdist.
+prune tests
+global-exclude *.py[cod] __pycache__ *.key *.jsonl
