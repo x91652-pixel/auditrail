@@ -38,6 +38,15 @@ from .keys import Signer
 from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, call_fields
 
 
+# Limits on what the recorder will take from a connection before it has even checked the token. Conservative defaults:
+# a call record is a few hundred bytes (arguments and results are digests), so 1 MiB per line is far above any real
+# request; an idle client is dropped after 5 minutes (RemoteLedger reconnects by itself); 128 connections is many more
+# than the agents on one host that share a recorder. All three are constructor arguments of RecorderService.
+DEFAULT_MAX_LINE_BYTES = 1024 * 1024
+DEFAULT_CONNECTION_TIMEOUT_S = 300.0
+DEFAULT_MAX_CONNECTIONS = 128
+
+
 def _token_matches(supplied: Any, expected: str) -> bool:
     """Constant-time token check.
 
@@ -89,6 +98,9 @@ class RecorderService:
         sink: Any = None,
         anchor_s: int = 0,
         recorder_id: str = "recorder",
+        max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+        connection_timeout_s: float = DEFAULT_CONNECTION_TIMEOUT_S,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
     ):
         if host not in ("127.0.0.1", "::1", "localhost"):
             raise ValueError("the recorder only listens on a loopback address")
@@ -101,7 +113,11 @@ class RecorderService:
         self.sink = sink
         self.anchor_s = anchor_s
         self.recorder_id = recorder_id
+        self.max_line_bytes = int(max_line_bytes)
+        self.connection_timeout_s = float(connection_timeout_s)
+        self.max_connections = int(max_connections)
         self._lock = threading.Lock()
+        self._connections = 0
         self._received = 0
         self._written = 0
         self._tools: set[str] = set()
@@ -109,8 +125,20 @@ class RecorderService:
         service = self
 
         class Handler(socketserver.StreamRequestHandler):
+            timeout = service.connection_timeout_s  # an idle or stalled client is dropped, not waited on forever
+
             def handle(self) -> None:
-                for raw in self.rfile:
+                while True:
+                    try:
+                        # at most max_line_bytes (+1 to tell "too long" from "exactly the limit") is ever buffered, and
+                        # this happens before the token is checked, so an unauthenticated client cannot make us hold more
+                        raw = self.rfile.readline(service.max_line_bytes + 1)
+                    except OSError:  # includes the read timeout
+                        return
+                    if not raw:
+                        return
+                    if len(raw) > service.max_line_bytes and not raw.endswith(b"\n"):
+                        return  # a request line longer than the limit: close the connection
                     try:
                         reply = service.handle_request(json.loads(raw.decode("utf-8")))
                     except Exception as exc:  # noqa: BLE001 - report to the client, keep serving
@@ -121,6 +149,20 @@ class RecorderService:
         class Server(socketserver.ThreadingTCPServer):
             daemon_threads = True
             allow_reuse_address = True
+
+            def verify_request(self, request, client_address) -> bool:
+                with service._lock:
+                    if service._connections >= service.max_connections:
+                        return False  # over the limit: the connection is closed without a thread
+                    service._connections += 1
+                return True
+
+            def process_request_thread(self, request, client_address) -> None:
+                try:
+                    super().process_request_thread(request, client_address)
+                finally:
+                    with service._lock:
+                        service._connections -= 1
 
         self._server = Server((host, port), Handler)
         self.address = self._server.server_address[:2]

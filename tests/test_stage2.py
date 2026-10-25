@@ -220,3 +220,94 @@ def test_f6_the_recorder_reports_the_refusal_to_the_client(tmp_path):
         assert reply["ok"] is False and "LedgerTailError" in reply["error"]
     finally:
         svc._server.server_close()
+
+
+# ---------------------------------------------------------------------------------------------- F7
+import json  # noqa: E402
+import socket  # noqa: E402
+
+from auditrail.recorder import (  # noqa: E402
+    DEFAULT_CONNECTION_TIMEOUT_S, DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_LINE_BYTES, RecorderService)
+
+
+def _service(tmp_path, **kw):
+    return RecorderService(Ledger(tmp_path / "r.jsonl", fsync=False), heartbeat_s=0, **kw).start()
+
+
+def _closed_by_peer(sock, within=5.0):
+    sock.settimeout(within)
+    try:
+        return sock.recv(1) == b""
+    except (ConnectionResetError, ConnectionAbortedError):
+        return True
+    except socket.timeout:
+        return False
+
+
+def test_f7_the_defaults_are_conservative_and_documented():
+    assert DEFAULT_MAX_LINE_BYTES == 1024 * 1024
+    assert DEFAULT_CONNECTION_TIMEOUT_S == 300.0 and DEFAULT_MAX_CONNECTIONS == 128
+    text = open(__import__("pathlib").Path(__file__).resolve().parents[1] / "SECURITY.md", encoding="utf-8").read()
+    for needle in ("max_line_bytes", "connection_timeout_s", "max_connections"):
+        assert needle in text, needle
+
+
+def test_f7_a_line_over_the_limit_closes_the_connection_and_a_normal_request_still_works(tmp_path):
+    svc = _service(tmp_path, token="t", max_line_bytes=1000)
+    try:
+        port = svc.address[1]
+        big = socket.create_connection(("127.0.0.1", port))
+        big.sendall(b"x" * 5000)  # no newline, no token: never parsed, never buffered beyond the limit
+        assert _closed_by_peer(big)
+        big.close()
+        ok = socket.create_connection(("127.0.0.1", port))
+        ok.sendall((json.dumps({"op": "event", "kind": "heartbeat", "fields": {}, "token": "wrong"}) + "\n").encode())
+        reply = json.loads(ok.makefile("rb").readline())
+        assert reply["ok"] is False and "token" in reply["error"]
+        ok.close()
+    finally:
+        svc.stop()
+
+
+def test_f7_a_line_exactly_at_the_limit_is_still_served(tmp_path):
+    svc = _service(tmp_path, token="t", max_line_bytes=300)
+    try:
+        base = json.dumps({"op": "call", "token": "wrong", "pad": ""})
+        req = json.dumps({"op": "call", "token": "wrong", "pad": "p" * (299 - len(base))}) + "\n"
+        assert len(req.encode()) == 300  # the line including its newline is exactly the limit
+        s = socket.create_connection(("127.0.0.1", svc.address[1]))
+        s.sendall(req.encode())
+        assert json.loads(s.makefile("rb").readline())["ok"] is False
+        s.close()
+    finally:
+        svc.stop()
+
+
+def test_f7_an_idle_connection_is_dropped_after_the_timeout(tmp_path):
+    svc = _service(tmp_path, token="t", connection_timeout_s=0.5)
+    try:
+        s = socket.create_connection(("127.0.0.1", svc.address[1]))
+        assert _closed_by_peer(s, within=8.0)
+        s.close()
+    finally:
+        svc.stop()
+
+
+def test_f7_connections_over_the_limit_are_closed_and_slots_are_given_back(tmp_path):
+    svc = _service(tmp_path, token="t", max_connections=2)
+    try:
+        port = svc.address[1]
+        a = socket.create_connection(("127.0.0.1", port))
+        b = socket.create_connection(("127.0.0.1", port))
+        time.sleep(0.3)
+        c = socket.create_connection(("127.0.0.1", port))
+        assert _closed_by_peer(c), "the third connection must be refused"
+        a.close()
+        time.sleep(0.5)
+        d = socket.create_connection(("127.0.0.1", port))
+        d.sendall((json.dumps({"op": "x", "token": "wrong"}) + "\n").encode())
+        assert json.loads(d.makefile("rb").readline())["ok"] is False, "a freed slot is reusable"
+        for x in (b, c, d):
+            x.close()
+    finally:
+        svc.stop()
