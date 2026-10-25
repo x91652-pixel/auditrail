@@ -48,6 +48,7 @@ import warnings
 from typing import Any, Callable, Iterable, Optional
 
 RESULT_MARKER = "@@auditrail-result@@"  # must match _isolate_worker.RESULT_MARKER (not imported: see runpy)
+from ._schema import MAX_REASON
 from .ledger import Ledger
 from .policy import Decision, PolicyEngine, SessionState, UnclassifiedToolWarning, call_site_list
 
@@ -176,7 +177,13 @@ class Guard:
 
     def _reason_for(self, exc: BaseException) -> str:
         if self.record_error_text:
-            return f"{type(exc).__name__}: {exc}"
+            text = f"{type(exc).__name__}: {exc}"
+            if len(text) > MAX_REASON:
+                # the recorder signs a reason of at most MAX_REASON characters; keep the start and say what was cut
+                digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+                tail = f" ... [truncated from {len(text)} characters; full text sha256:{digest}]"
+                text = text[:MAX_REASON - len(tail)] + tail
+            return text
         digest = hashlib.sha256(str(exc).encode("utf-8")).hexdigest()
         return f"{type(exc).__name__} (message sha256:{digest[:16]})"
 

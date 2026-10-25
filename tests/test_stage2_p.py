@@ -42,3 +42,48 @@ def test_p1_a_write_that_fails_is_not_counted_as_received(tmp_path):
         assert (svc._received, svc._written) == (0, 0)
     finally:
         svc.stop()
+
+
+# ---------------------------------------------------------------------------------------------- P2
+from auditrail import Guard, PolicyEngine, RemoteLedger  # noqa: E402
+
+CFG = {"version": "p2", "agents": {"a": {"allowed_tools": ["boom"] + [f"t{i}" for i in range(1100)],
+                                          "tool_categories": {}}},
+       "default": {"allowed_tools": [], "enforce_lethal_trifecta": True}}
+
+
+def test_p2_a_very_long_exception_message_is_truncated_with_a_digest_and_does_not_hide_the_original(tmp_path):
+    svc, ledger, signer = recorder(tmp_path)
+    try:
+        guard = Guard(PolicyEngine(CFG), RemoteLedger(port=svc.address[1], token="t"), record_error_text=True)
+
+        def boom():
+            raise ValueError("x" * 20000)
+
+        with pytest.raises(ValueError):  # the tool's own error, not RecorderUnavailable
+            guard.guarded_tool("boom")(boom)(guard.session("a"))
+        rec = [r for r in ledger if r["kind"] == "call"][0]
+        assert rec["decision"] == "error" and len(rec["reason"]) <= 8192
+        assert rec["reason"].startswith("ValueError: xxx") and "truncated from 20" in rec["reason"] and "sha256:" in rec["reason"]
+        guard.ledger.close()
+    finally:
+        svc.stop()
+
+
+def test_p2_a_guard_with_1100_tools_gets_its_heartbeat_accepted(tmp_path):
+    svc, ledger, signer = recorder(tmp_path)
+    try:
+        guard = Guard(PolicyEngine(CFG), RemoteLedger(port=svc.address[1], token="t"))
+        for i in range(1100):
+            guard.guarded_tool(f"t{i}")(lambda: None)
+        guard.heartbeat()
+        beat = [r for r in ledger if r["kind"] == "heartbeat" and r["recorder_id"].startswith("guard-")][0]
+        assert len(beat["tools"]) == 1100
+        guard.ledger.close()
+    finally:
+        svc.stop()
+
+
+def test_p2_a_short_error_text_is_unchanged(tmp_path):
+    guard = Guard(PolicyEngine(CFG), Ledger(tmp_path / "l.jsonl", fsync=False), record_error_text=True)
+    assert guard._reason_for(ValueError("small")) == "ValueError: small"

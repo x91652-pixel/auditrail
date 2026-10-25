@@ -16,7 +16,7 @@ from ._strict import is_hex
 
 MAX_TEXT = 1024
 MAX_REASON = 8192
-MAX_LIST = 1024
+MAX_LIST = 10_000  # tools wrapped by one writer, or categories on one record
 MAX_INT = 2**63 - 1
 DECISIONS = ("allow", "deny", "sandboxed", "error")
 
