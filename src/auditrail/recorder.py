@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .keys import Signer
+from ._schema import RecordRejected, check_call, check_event  # noqa: F401
 from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, call_fields
 
 
@@ -180,18 +181,26 @@ class RecorderService:
         op = req.get("op")
         if op not in ("call", "event"):
             return {"ok": False, "error": f"unsupported op {op!r} (the recorder only appends)"}
+        fields = req.get("fields")
+        if fields is None:
+            fields = {}
+        # Only records of a fixed shape are signed, and those a client asked for are marked origin="client" (inside
+        # the signature). A request that is refused here is not counted as a call the recorder received.
+        if op == "call":
+            check_call(fields)
+        else:
+            check_event(req.get("kind"), fields)
         with self._lock:
             self._received += 1
-        fields = req.get("fields") or {}
         if op == "call":
-            rec = self.ledger.append_call(fields)  # validates the exact field set
+            rec = self.ledger.append_call(fields, origin="client")
             with self._lock:
                 self._tools.add(rec["tool"])
         else:
             kind = req.get("kind")
             if kind not in EVENT_KINDS:
                 return {"ok": False, "error": f"unsupported event kind {kind!r}"}
-            rec = self.ledger.record_event(kind, **fields)
+            rec = self.ledger.record_event(kind, origin="client", **fields)
         with self._lock:
             self._written += 1
         return {"ok": True, "seq": rec["seq"], "hash": rec["hash"]}

@@ -318,7 +318,7 @@ class Ledger:
             duration_ms=duration_ms, trace_id=trace_id, policy_hash=policy_hash,
         ))
 
-    def append_call(self, fields: dict) -> EvidenceRecord:
+    def append_call(self, fields: dict, origin: Optional[str] = None) -> EvidenceRecord:
         """Write call fields prepared by call_fields() (digests already computed).
 
         This is what the recorder service uses: the agent side computes digests,
@@ -328,7 +328,8 @@ class Ledger:
             raise InvalidRecord(f"call fields must be exactly {sorted(CALL_FIELDS)}")
         if fields["kind"] != "call" or fields["decision"] not in DECISIONS:
             raise InvalidRecord(f"decision must be one of {DECISIONS}, got {fields['decision']!r}")
-        return self._append(dict(fields))
+        extra = {} if origin is None else {"origin": origin}  # added by the recorder for records a client asked for
+        return self._append({**fields, **extra})
 
     def record_event(self, kind: str, **fields: Any) -> EvidenceRecord:
         """Record a non-call event: a heartbeat or one side of an agent-to-agent message."""

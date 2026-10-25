@@ -105,7 +105,7 @@ already use.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up while the writer is alive (a process that
-  dies inside a tool leaves no record and no count; see [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md)).
+  dies inside a tool leaves no record and no count; a heartbeat written on a client's request carries `origin: "client"`, the recorder's own does not; see [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md)).
 - **Independent implementation of the verifier.** `verifier/` is a separate Rust program, written from the
   [public format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md) and tested against the same
   conformance vectors as the Python code. One offline binary, no network. It was written by the

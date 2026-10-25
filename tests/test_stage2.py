@@ -216,7 +216,7 @@ def test_f6_the_recorder_reports_the_refusal_to_the_client(tmp_path):
     p.write_bytes(p.read_bytes()[:-5])
     svc = RecorderService(led, heartbeat_s=0)
     try:
-        reply = svc.handle_request({"op": "event", "kind": "heartbeat", "fields": {}})
+        reply = svc.handle_request({"op": "event", "kind": "heartbeat", "fields": {"recorder_id": "r", "tools": [], "policy_version": "p", "policy_hash": None, "calls_attempted": 0, "calls_recorded": 0, "interval_s": 60}})
         assert reply["ok"] is False and "LedgerTailError" in reply["error"]
     finally:
         svc._server.server_close()
