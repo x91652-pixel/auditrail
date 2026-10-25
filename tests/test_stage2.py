@@ -59,3 +59,67 @@ def test_f1_parallel_calls_in_one_session_cannot_complete_the_trifecta(tmp_path)
     denied = [v for v in outcome.values() if v[0] == "deny"][0][1]
     assert "lethal_trifecta" in denied
     assert len(entered) == 2, "the refused tool must not have run"
+
+
+# ---------------------------------------------------------------------------------------------- F3
+class FlakyLedger:
+    """A Ledger that can be switched offline, like a recorder that is unreachable for a while."""
+
+    def __init__(self, ledger):
+        self._l = ledger
+        self.offline = False
+
+    def __getattr__(self, name):
+        return getattr(self._l, name)
+
+    def record(self, **kw):
+        if self.offline:
+            raise OSError("recorder offline")
+        return self._l.record(**kw)
+
+    def record_heartbeat(self, **kw):
+        if self.offline:
+            raise OSError("recorder offline")
+        return self._l.record_heartbeat(**kw)
+
+
+def test_f3_a_failed_heartbeat_does_not_erase_the_count_of_unrecorded_calls(tmp_path):
+    from auditrail.verifier import verify_all
+
+    real = Ledger(tmp_path / "l.jsonl", fsync=False)
+    flaky = FlakyLedger(real)
+    guard = make_guard(tmp_path, flaky)
+    work = guard.guarded_tool("web")(lambda: "ok")
+    session = guard.session("a")
+    guard.heartbeat()  # a first, good heartbeat: the ledger has one
+    flaky.offline = True
+    for _ in range(3):
+        with pytest.raises(OSError):
+            work(session)  # the tool ran; its record could not be written
+    with pytest.raises(OSError):
+        guard.heartbeat()  # fails: the counts it took must be put back
+    flaky.offline = False
+    guard.heartbeat()
+    beats = [r for r in real if r["kind"] == "heartbeat"]
+    assert (beats[-1]["calls_attempted"], beats[-1]["calls_recorded"]) == (3, 0)
+    assert verify_all(tmp_path / "l.jsonl", max_gap_s=3600)["status"] == "UNRECORDED_CALLS"
+
+
+def test_f3_the_recorder_service_restores_its_counts_when_the_heartbeat_cannot_be_written(tmp_path):
+    from auditrail import RecorderService
+
+    ledger = Ledger(tmp_path / "r.jsonl", fsync=False)
+    svc = RecorderService(ledger, heartbeat_s=0)
+    try:
+        svc._received, svc._written = 5, 2
+        real = ledger.record_heartbeat
+        ledger.record_heartbeat = lambda **kw: (_ for _ in ()).throw(OSError("disk full"))
+        with pytest.raises(OSError):
+            svc.heartbeat()
+        assert (svc._received, svc._written) == (5, 2)
+        ledger.record_heartbeat = real
+        rec = svc.heartbeat()
+        assert (rec["calls_attempted"], rec["calls_recorded"]) == (5, 2)
+        assert (svc._received, svc._written) == (0, 0)
+    finally:
+        svc._server.server_close()

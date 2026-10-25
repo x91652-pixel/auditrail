@@ -185,11 +185,19 @@ class Guard:
         with self._count_lock:
             attempted, recorded = self._attempted, self._recorded
             self._attempted = self._recorded = 0
-        self.ledger.record_heartbeat(
-            recorder_id=self.recorder_id, tools=sorted(self.tools), policy_version=self.policy.version,
-            policy_hash=self.policy.policy_hash, calls_attempted=attempted, calls_recorded=recorded,
-            interval_s=int(interval_s),
-        )
+        try:
+            self.ledger.record_heartbeat(
+                recorder_id=self.recorder_id, tools=sorted(self.tools), policy_version=self.policy.version,
+                policy_hash=self.policy.policy_hash, calls_attempted=attempted, calls_recorded=recorded,
+                interval_s=int(interval_s),
+            )
+        except BaseException:
+            # The heartbeat was not written, so the counts it took are still owed: put them back, otherwise calls that
+            # ran without evidence would be forgotten and the next heartbeat would read 0/0.
+            with self._count_lock:
+                self._attempted += attempted
+                self._recorded += recorded
+            raise
 
     def start_heartbeats(self, interval_s: int = 60) -> None:
         """Write a heartbeat now and every interval_s seconds from a daemon thread."""

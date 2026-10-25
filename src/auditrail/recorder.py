@@ -160,11 +160,17 @@ class RecorderService:
             received, written = self._received, self._written
             self._received = self._written = 0
             tools = sorted(self._tools)
-        return self.ledger.record_heartbeat(
-            recorder_id=self.recorder_id, tools=tools, policy_version=self.policy_version,
-            policy_hash=self.policy_hash, calls_attempted=received, calls_recorded=written,
-            interval_s=self.heartbeat_s,
-        )
+        try:
+            return self.ledger.record_heartbeat(
+                recorder_id=self.recorder_id, tools=tools, policy_version=self.policy_version,
+                policy_hash=self.policy_hash, calls_attempted=received, calls_recorded=written,
+                interval_s=self.heartbeat_s,
+            )
+        except BaseException:
+            with self._lock:  # not written: the counts are still owed to the next heartbeat
+                self._received += received
+                self._written += written
+            raise
 
     def anchor(self) -> Optional[dict]:
         if not self.anchors_path:
