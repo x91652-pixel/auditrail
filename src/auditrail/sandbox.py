@@ -309,7 +309,8 @@ class Guard:
             def wrapper(session: SessionState, *args: Any, **kwargs: Any) -> Any:
                 with self._count_lock:
                     self._attempted += 1
-                decision: Decision = self.policy.check(session, name, extra_categories=categories)
+                # check and reserve in one locked step: a second call admitted a moment later must see this one
+                decision: Decision = self.policy.admit(session, name, extra_categories=categories)
                 call_args = {"args": args, "kwargs": kwargs}
                 common = dict(agent_id=session.agent_id, session_id=session.session_id, trace_id=session.trace_id,
                               policy_version=self.policy.version, policy_hash=self.policy.policy_hash,
@@ -330,15 +331,12 @@ class Guard:
                         result = fn(*args, **kwargs)
                         effective_decision = "allow"
                 except Exception as exc:
-                    # A failed call may still have touched data before failing,
-                    # so it counts toward the workflow's trifecta state (conservative).
-                    self.policy.commit(session, name, extra_categories=categories)
+                    # The categories were reserved at admission (a failed call may have touched data first).
                     self._write(**common, decision="error", reason=self._reason_for(exc),
                                 duration_ms=(time.monotonic() - start) * 1000)
                     raise
                 duration_ms = (time.monotonic() - start) * 1000
 
-                self.policy.commit(session, name, extra_categories=categories)
                 self._write(**common, decision=effective_decision, result=result, duration_ms=duration_ms)
                 return result
 

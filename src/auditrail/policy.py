@@ -40,6 +40,7 @@ import difflib
 import hashlib
 import json
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
@@ -170,6 +171,7 @@ class PolicyEngine:
             json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
         ).hexdigest()
         self._workflows: dict[str, set] = {}
+        self._admission_lock = threading.RLock()
 
     @classmethod
     def from_yaml(cls, path: str, strict: Optional[bool] = None) -> "PolicyEngine":
@@ -369,6 +371,19 @@ class PolicyEngine:
                 ),
             )
         return Decision(allow=True)
+
+    def admit(self, session: SessionState, tool: str, extra_categories: Optional[list[str]] = None) -> Decision:
+        """check() and, when the call is allowed, reserve its categories, as one step under a lock.
+
+        Reserving at admission (not after the tool returns) is what stops two tools that start at the same time from
+        both seeing an empty history. A reservation is never given back: the call that reserved it either completes
+        or fails, and both already count toward the history (a failed call may have touched data first).
+        """
+        with self._admission_lock:
+            decision = self.check(session, tool, extra_categories)
+            if decision.allow:
+                self.commit(session, tool, extra_categories)
+            return decision
 
     def commit(self, session: SessionState, tool: str, extra_categories: Optional[list[str]] = None) -> None:
         """Record that `tool`'s categories are now part of this session's history.
