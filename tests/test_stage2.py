@@ -299,7 +299,9 @@ def test_f7_connections_over_the_limit_are_closed_and_slots_are_given_back(tmp_p
         port = svc.address[1]
         a = socket.create_connection(("127.0.0.1", port))
         b = socket.create_connection(("127.0.0.1", port))
-        time.sleep(0.3)
+        for x in (a, b):  # both show the token: only unauthenticated connections are evicted to make room (R2)
+            x.sendall((json.dumps({"op": "x", "token": "t"}) + "\n").encode())
+            x.makefile("rb").readline()
         c = socket.create_connection(("127.0.0.1", port))
         assert _closed_by_peer(c), "the third connection must be refused"
         a.close()

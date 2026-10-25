@@ -32,6 +32,7 @@ import socket
 import socketserver
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -48,6 +49,7 @@ from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, LedgerTailError, call_f
 DEFAULT_MAX_LINE_BYTES = 1024 * 1024
 DEFAULT_CONNECTION_TIMEOUT_S = 300.0
 DEFAULT_MAX_CONNECTIONS = 128
+DEFAULT_PREAUTH_TIMEOUT_S = 10.0  # a connection must present a valid token within this long of connecting
 
 
 def _token_matches(supplied: Any, expected: str) -> bool:
@@ -104,6 +106,7 @@ class RecorderService:
         max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
         connection_timeout_s: float = DEFAULT_CONNECTION_TIMEOUT_S,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        preauth_timeout_s: float = DEFAULT_PREAUTH_TIMEOUT_S,
     ):
         if host not in ("127.0.0.1", "::1", "localhost"):
             raise ValueError("the recorder only listens on a loopback address")
@@ -119,6 +122,8 @@ class RecorderService:
         self.max_line_bytes = int(max_line_bytes)
         self.connection_timeout_s = float(connection_timeout_s)
         self.max_connections = int(max_connections)
+        self.preauth_timeout_s = float(preauth_timeout_s)
+        self._unauthenticated: dict = {}  # socket -> time connected, for connections that have not shown the token
         self._lock = threading.Lock()
         self._connections = 0
         self._received = 0
@@ -131,8 +136,36 @@ class RecorderService:
             timeout = service.connection_timeout_s  # an idle or stalled client is dropped, not waited on forever
 
             def handle(self) -> None:
+                # A fixed deadline from connecting: a client that never shows the token is cut off even if it sends a
+                # byte now and then (which would restart a per-read socket timeout every time).
+                authed = service.token is None
+                deadline = time.monotonic() + service.preauth_timeout_s
+                state = {"authed": authed}
+
+                def expire() -> None:
+                    if not state["authed"]:
+                        try:
+                            self.connection.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+
+                timer = threading.Timer(service.preauth_timeout_s, expire)
+                timer.daemon = True
+                if not authed:
+                    timer.start()
+                try:
+                    self._serve(authed, deadline, state)
+                finally:
+                    timer.cancel()
+
+            def _serve(self, authed: bool, deadline: float, state: dict) -> None:
                 while True:
                     try:
+                        if not authed:  # until a valid token is shown the connection lives on a short, fixed deadline
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                return
+                            self.connection.settimeout(min(remaining, service.connection_timeout_s))
                         # at most max_line_bytes (+1 to tell "too long" from "exactly the limit") is ever buffered, and
                         # this happens before the token is checked, so an unauthenticated client cannot make us hold more
                         raw = self.rfile.readline(service.max_line_bytes + 1)
@@ -143,7 +176,14 @@ class RecorderService:
                     if len(raw) > service.max_line_bytes and not raw.endswith(b"\n"):
                         return  # a request line longer than the limit: close the connection
                     try:
-                        reply = service.handle_request(json.loads(raw.decode("utf-8")))
+                        req = json.loads(raw.decode("utf-8"))
+                        if not authed and isinstance(req, dict) and _token_matches(req.get("token"), service.token):
+                            authed = True
+                            state["authed"] = True
+                            with service._lock:
+                                service._unauthenticated.pop(self.request, None)
+                            self.connection.settimeout(service.connection_timeout_s)
+                        reply = service.handle_request(req)
                     except Exception as exc:  # noqa: BLE001 - report to the client, keep serving
                         reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
                     self.wfile.write((json.dumps(reply) + "\n").encode("utf-8"))
@@ -156,8 +196,18 @@ class RecorderService:
             def verify_request(self, request, client_address) -> bool:
                 with service._lock:
                     if service._connections >= service.max_connections:
-                        return False  # over the limit: the connection is closed without a thread
+                        if not service._unauthenticated:
+                            return False  # over the limit and everyone is authenticated: refuse the newcomer
+                        # make room by dropping the oldest connection that has not shown the token
+                        victim = min(service._unauthenticated, key=service._unauthenticated.get)
+                        service._unauthenticated.pop(victim, None)
+                        try:
+                            victim.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
                     service._connections += 1
+                    if service.token is not None:
+                        service._unauthenticated[request] = time.monotonic()
                 return True
 
             def process_request_thread(self, request, client_address) -> None:
@@ -166,6 +216,7 @@ class RecorderService:
                 finally:
                     with service._lock:
                         service._connections -= 1
+                        service._unauthenticated.pop(request, None)
 
         self._server = Server((host, port), Handler)
         self.address = self._server.server_address[:2]
