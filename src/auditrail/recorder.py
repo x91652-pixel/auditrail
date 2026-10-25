@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import json
 import os
+import select
 import socket
 import socketserver
 import threading
@@ -288,23 +289,50 @@ class RemoteLedger:
         line = (json.dumps(req, ensure_ascii=False) + "\n").encode("utf-8")
         with self._lock:
             for attempt in (1, 2):
+                # Before the request is on the wire a failure is safe to retry: nothing was processed.
                 try:
+                    if self._sock is not None and self._peer_closed():
+                        self.close()  # an idle connection the recorder already dropped: reconnect, do not fail
                     if self._sock is None:
                         self._sock = socket.create_connection(self.address, timeout=self.timeout)
                         self._file = self._sock.makefile("rb")
                     self._sock.sendall(line)
-                    raw = self._file.readline()
-                    if not raw:
-                        raise ConnectionError("recorder closed the connection")
-                    reply = json.loads(raw.decode("utf-8"))
-                    break
                 except OSError as exc:
                     self.close()
                     if attempt == 2:
                         raise RecorderUnavailable(f"recorder at {self.address[0]}:{self.address[1]} unreachable: {exc}") from exc
+                    continue
+                # The request has been sent. From here on a failure is NOT retried: the recorder may already have
+                # written the record and only the reply was lost, and sending it again would write it twice.
+                try:
+                    raw = self._file.readline()
+                    if not raw:
+                        raise ConnectionError("recorder closed the connection")
+                    reply = json.loads(raw.decode("utf-8"))
+                except (OSError, ValueError) as exc:
+                    self.close()
+                    raise RecorderUnavailable(
+                        f"outcome unknown: the request was sent to {self.address[0]}:{self.address[1]} but no valid reply "
+                        f"came back ({type(exc).__name__}). The call may or may not have been recorded; it was not sent "
+                        "again. Check the ledger before repeating it.") from exc
+                break
         if not reply.get("ok"):
             raise RecorderUnavailable(f"recorder refused the record: {reply.get('error')}")
         return reply
+
+    def _peer_closed(self) -> bool:
+        """True if the recorder has closed (or reset) the idle connection, or sent something unexpected on it.
+
+        select() says "readable" on a socket whose peer closed it; MSG_PEEK then reads nothing off the queue. Both
+        steps work on Windows and on POSIX. A reset that happens after this check, in the moment before sendall, is
+        not caught here and is reported as an unknown outcome."""
+        try:
+            readable, _, _ = select.select([self._sock], [], [], 0)
+            if not readable:
+                return False
+            return True  # EOF, a reset, or stray bytes: in every case the connection is not usable for a new request
+        except (OSError, ValueError):
+            return True
 
     def close(self) -> None:
         try:
