@@ -123,3 +123,40 @@ def test_f3_the_recorder_service_restores_its_counts_when_the_heartbeat_cannot_b
         assert (svc._received, svc._written) == (0, 0)
     finally:
         svc._server.server_close()
+
+
+# ---------------------------------------------------------------------------------------------- F4
+import asyncio  # noqa: E402
+
+
+@pytest.mark.parametrize("exc", [SystemExit(3), KeyboardInterrupt(), asyncio.CancelledError()])
+def test_f4_a_base_exception_in_a_tool_is_recorded_counts_toward_the_trifecta_and_propagates(tmp_path, exc):
+    guard = make_guard(tmp_path)
+    session = guard.session("a")
+
+    def read_then_die():
+        raise exc
+
+    reader = guard.guarded_tool("read_private")(read_then_die)
+    with pytest.raises(type(exc)):
+        reader(session)
+    web = guard.guarded_tool("web")(lambda: "page")
+    send = guard.guarded_tool("send_out")(lambda: "sent")
+    web(session)
+    with pytest.raises(ToolDenied):  # the interrupted read counted: data_access + untrusted_input + external_comm
+        send(session)
+    rows = [r for r in Ledger(tmp_path / "l.jsonl") if r["kind"] == "call"]
+    assert [(r["tool"], r["decision"]) for r in rows] == [("read_private", "error"), ("web", "allow"), ("send_out", "deny")]
+    assert type(exc).__name__ in rows[0]["reason"]
+
+
+def test_f4_a_failing_record_does_not_hide_the_original_interrupt(tmp_path):
+    flaky = FlakyLedger(Ledger(tmp_path / "l.jsonl", fsync=False))
+    guard = make_guard(tmp_path, flaky)
+
+    def interrupted():
+        flaky.offline = True
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        guard.guarded_tool("read_private")(interrupted)(guard.session("a"))

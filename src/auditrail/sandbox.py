@@ -174,7 +174,7 @@ class Guard:
         with self._count_lock:
             self._recorded += 1
 
-    def _reason_for(self, exc: Exception) -> str:
+    def _reason_for(self, exc: BaseException) -> str:
         if self.record_error_text:
             return f"{type(exc).__name__}: {exc}"
         digest = hashlib.sha256(str(exc).encode("utf-8")).hexdigest()
@@ -342,6 +342,16 @@ class Guard:
                     # The categories were reserved at admission (a failed call may have touched data first).
                     self._write(**common, decision="error", reason=self._reason_for(exc),
                                 duration_ms=(time.monotonic() - start) * 1000)
+                    raise
+                except BaseException as exc:
+                    # SystemExit, KeyboardInterrupt, asyncio.CancelledError: not an Exception, but the tool may have
+                    # read data before it was interrupted. Its categories are already reserved; record it as an error
+                    # (best effort: a failing write must not hide the interrupt) and let the interrupt continue.
+                    try:
+                        self._write(**common, decision="error", reason=self._reason_for(exc),
+                                    duration_ms=(time.monotonic() - start) * 1000)
+                    except Exception:  # noqa: BLE001
+                        pass
                     raise
                 duration_ms = (time.monotonic() - start) * 1000
 
