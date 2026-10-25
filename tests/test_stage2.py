@@ -311,3 +311,37 @@ def test_f7_connections_over_the_limit_are_closed_and_slots_are_given_back(tmp_p
             x.close()
     finally:
         svc.stop()
+
+
+# ---------------------------------------------------------------------------------------------- F9
+from auditrail.agent_bridge import AgentMessage, SignatureError, sign_message, verify_message  # noqa: E402
+
+
+def _good():
+    return sign_message("alice", {"x": 1}, "secret").to_dict()
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(sig="é" * 64),
+    lambda d: d.update(sig=12345),
+    lambda d: d.update(sig=None),
+    lambda d: d.update(extra="key"),
+    lambda d: d.pop("nonce"),
+    lambda d: d.update(ts="soon"),
+    lambda d: d.update(ts=None),
+    lambda d: d.update(payload={1, 2}),
+    lambda d: d.update(sender=["not", "a", "string"]),
+])
+def test_f9_a_malformed_v1_message_is_a_signature_error_not_a_type_error(mutate):
+    d = _good()
+    mutate(d)
+    with pytest.raises(SignatureError):
+        verify_message(d, "secret")
+
+
+def test_f9_a_good_v1_message_and_a_wrong_secret_behave_as_before():
+    assert verify_message(_good(), "secret") == {"x": 1}
+    with pytest.raises(SignatureError, match="signature mismatch"):
+        verify_message(_good(), "other")
+    with pytest.raises(SignatureError):
+        verify_message(AgentMessage(**_good()), "other")

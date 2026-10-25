@@ -172,7 +172,17 @@ def verify_message(
     replay_guard: Optional[ReplayGuard] = None,
     max_age_seconds: float = 60.0,
 ) -> Any:
-    """Returns the verified payload, or raises SignatureError."""
+    """Returns the verified payload, or raises SignatureError (also for a message that is malformed in any way:
+    wrong types, a non-ASCII or non-string signature, missing or extra keys)."""
+    try:
+        return _verify_v1(msg, secret, replay_guard, max_age_seconds)
+    except SignatureError:
+        raise
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError) as exc:
+        raise SignatureError(f"malformed message ({type(exc).__name__}) -- rejected") from None
+
+
+def _verify_v1(msg, secret, replay_guard, max_age_seconds):
     if isinstance(msg, dict):
         msg = AgentMessage(**msg)
 
