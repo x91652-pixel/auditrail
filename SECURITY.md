@@ -154,7 +154,7 @@ If the process or machine stops while a record is being written, the file can en
 record that has no newline after it. Appending to it would either fail for good (a torn record cannot be read back) or
 put two records on one line, which the verifier then reports as `TAMPERED_LEDGER`: good evidence made to look altered.
 `Ledger` therefore **refuses to append** to a file whose last byte is not a newline and raises
-`LedgerTailError` (through the recorder, the client gets an error reply). It does not truncate or repair anything,
+`LedgerTailError` (through a running recorder, the client gets an error reply; `auditrail recorder` started on such a file prints one `[ERROR]` line with the guidance and exits with code 2, without a traceback). It does not truncate or repair anything,
 because any change to the file is a change to the evidence.
 
 What to do: keep a copy of the file exactly as it is. Then either restore a good copy of the ledger, or start a new

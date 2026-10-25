@@ -30,6 +30,7 @@ import os
 import select
 import socket
 import socketserver
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -37,7 +38,7 @@ from typing import Any, Optional
 
 from .keys import Signer
 from ._schema import RecordRejected, check_call, check_event  # noqa: F401
-from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, call_fields
+from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, LedgerTailError, call_fields
 
 
 # Limits on what the recorder will take from a connection before it has even checked the token. Conservative defaults:
@@ -413,10 +414,15 @@ def serve(args) -> int:
         print("[RECORDER][WARN] no token: any local process that can reach the port can write to the ledger. "
               "Set the token environment variable.", flush=True)
     anchor_every = args.anchor_every if args.anchor_every is not None else (300 if args.anchors else 0)
-    svc = RecorderService(
-        ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,
-        heartbeat_s=args.heartbeat, anchors_path=args.anchors, sink=sink, anchor_s=anchor_every,
-    ).start()
+    try:
+        svc = RecorderService(
+            ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,
+            heartbeat_s=args.heartbeat, anchors_path=args.anchors, sink=sink, anchor_s=anchor_every,
+        ).start()
+    except LedgerTailError as exc:
+        # the first heartbeat is the first write, so a ledger that ends in the middle of a line is found here
+        print("[ERROR] " + " ".join(str(exc).split()), file=sys.stderr, flush=True)
+        return 2
     if args.anchors and anchor_every:
         svc.anchor()  # one right away, so a recorder killed early still left something behind
     host, port = svc.address
