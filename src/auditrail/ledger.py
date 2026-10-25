@@ -145,6 +145,27 @@ class EvidenceRecord(dict):
         return dict(self)
 
 
+class LedgerTailError(RuntimeError):
+    """The ledger file does not end with a newline, so a previous write was cut short (a crash, a full disk, a
+    hand edit). Nothing is appended: adding to such a file would either fail forever (a torn record) or glue two
+    records onto one line, turning good evidence into something that looks tampered with."""
+
+
+def _check_tail(path: Path) -> None:
+    size = path.stat().st_size
+    if size == 0:
+        return
+    with path.open("rb") as f:
+        f.seek(size - 1)
+        if f.read(1) != b"\n":
+            raise LedgerTailError(
+                f"{path}: the file does not end with a newline, so the last write was cut short. auditrail will not "
+                "append to it and will not repair it (any change to the file is a change to the evidence). Keep a copy "
+                "of the file as it is, then either restore a good copy, or start a new ledger file and note where the "
+                "old one ends. See SECURITY.md, 'A ledger that ends in the middle of a line'."
+            )
+
+
 class TamperError(Exception):
     """Raised by verify() consumers that want an exception instead of a bool."""
 
@@ -251,6 +272,7 @@ class Ledger:
         if "sig_alg" in fields:  # the ledger decides it from the signer; a caller must not be able to forge it
             raise InvalidRecord("field 'sig_alg' is set by the ledger itself")
         with _file_lock(self._lock_path):
+            _check_tail(self.path)
             last_seq, prev_hash = self._head()
             rec = {
                 "format": FORMAT_VERSION,

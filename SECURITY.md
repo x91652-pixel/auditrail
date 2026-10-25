@@ -109,6 +109,7 @@ before. **Four are behavior changes that apply by default** (labels that contrad
 | New verification outcomes: `UNSUPPORTED_ALGORITHM` and `UNSUPPORTED_FORMAT` (verifiers in both languages) | A record or anchor that names a signature algorithm this verifier does not implement (optional `sig_alg`; anchors of `anchor_version` 3) is `BAD_SIGNATURE` when keys were required and the key is an Ed25519 key ("algorithm mismatch"). `UNSUPPORTED_ALGORITHM` (**not OK, exit code 1, inconclusive**) occurs only when the trusted key is explicitly registered as a type this verifier cannot check, which a `.pub` file cannot express. A definite finding (a stale signature, a `REWRITTEN` or `TRUNCATED` against a witness, ...) always outranks it. An integer `format` other than 2 is `UNSUPPORTED_FORMAT`. An explicit `"sig_alg":"ed25519"` is `MALFORMED_RECORD` (`TAMPERED_ANCHOR` in an anchor). Ledgers written today carry no `sig_alg` and are byte-identical and verify as before. | Nothing to go back to for existing ledgers. Scripts that switch on the status string must treat the two new values as "could not check", not as success or as tampering. |
 | Python `verify --anchors` coverage for an anchors file that is not in increasing `seq` order | `anchored_upto` is now the highest anchored `seq` (the format and the Rust verifier already did this); before, it was the seq of the last line, so the count of records after the last anchor could be too large. | Nothing to go back to: anchors written by `auditrail anchor` are always in increasing order, so existing files report the same numbers. |
 | Parallel tool calls in one workflow (`PolicyEngine.admit`, used by `Guard`) | A call's categories are reserved when it is admitted, under a lock, instead of after it returns. Before, three tools started together (a model asking for several tool calls at once) each saw an empty history and all ran, completing the trifecta. Now exactly the call that would complete it is refused, whatever the order. A refused call is recorded as `deny` as before. | Nothing to go back to. Code that calls `PolicyEngine.check()` and `commit()` itself is unchanged; `Guard` uses the new `admit()`. |
+| Appending to a ledger that does not end in a newline (`Ledger`, the recorder) | `LedgerTailError`: nothing is written and the file is not changed. Before, a torn last record made every later append fail, and a missing newline made the next record share a line with the last one. | Restore or move the file and start a new one; see "A ledger that ends in the middle of a line". There is deliberately no switch to append anyway. |
 | `auditrail verify --anchors FILE` with a FILE that does not exist (Python CLI) | One line `[ERROR] FILE: file not found` (or `not a file` for a directory) on stderr and **exit code 2**, no result. Before: `OK`, as if no anchors had been made yet, which hid a mistyped path. A witness copy, or an anchors file that is a regular file but cannot be read (a lock, permissions), is `SINK_UNREACHABLE` (inconclusive, exit 1) instead of an uncaught error; a directory given to `--anchors` is an `[ERROR]` (`not a file`) with exit 2. | Leave out `--anchors` to verify without anchors. The library function `verify_anchors` still treats a missing file as no anchors; only the command line changed. |
 
 Not changed: an empty category list is still not a declaration in strict mode, and without strict mode a tool with no
@@ -143,3 +144,17 @@ vulnerability"), rather than opening a public issue.
 
 See [ROADMAP.md](ROADMAP.md) for what is planned to close the gaps above, and
 [docs/spec/evidence-format-v2.md](docs/spec/evidence-format-v2.md) for the format.
+
+## A ledger that ends in the middle of a line
+
+If the process or machine stops while a record is being written, the file can end with half a record, or with a whole
+record that has no newline after it. Appending to it would either fail for good (a torn record cannot be read back) or
+put two records on one line, which the verifier then reports as `TAMPERED_LEDGER`: good evidence made to look altered.
+`Ledger` therefore **refuses to append** to a file whose last byte is not a newline and raises
+`LedgerTailError` (through the recorder, the client gets an error reply). It does not truncate or repair anything,
+because any change to the file is a change to the evidence.
+
+What to do: keep a copy of the file exactly as it is. Then either restore a good copy of the ledger, or start a new
+ledger file and write down where the old one ends (the last anchor you hold from a witness shows how much of it is
+covered). The verifier still reads a file that lacks only its final newline as the records it holds.
+

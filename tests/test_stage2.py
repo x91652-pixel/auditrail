@@ -160,3 +160,63 @@ def test_f4_a_failing_record_does_not_hide_the_original_interrupt(tmp_path):
 
     with pytest.raises(KeyboardInterrupt):
         guard.guarded_tool("read_private")(interrupted)(guard.session("a"))
+
+
+# ---------------------------------------------------------------------------------------------- F6
+from auditrail.ledger import LedgerTailError  # noqa: E402
+
+
+def _ledger_with_two_records(tmp_path):
+    led = Ledger(tmp_path / "l.jsonl", fsync=False)
+    for i in range(2):
+        led.record(agent_id="a", session_id="s", policy_version="p", tool="t", categories=[], args={"i": i},
+                   decision="allow")
+    return led
+
+
+def test_f6_a_cut_off_last_line_is_refused_with_guidance_and_the_file_is_left_alone(tmp_path):
+    led = _ledger_with_two_records(tmp_path)
+    p = tmp_path / "l.jsonl"
+    p.write_bytes(p.read_bytes()[:-40])
+    before = p.read_bytes()
+    with pytest.raises(LedgerTailError) as ei:
+        led.record(agent_id="a", session_id="s", policy_version="p", tool="t", categories=[], args={}, decision="allow")
+    msg = str(ei.value)
+    assert "cut short" in msg and "will not repair" in msg and "start a new ledger file" in msg
+    assert p.read_bytes() == before, "the evidence must not be changed"
+
+
+def test_f6_a_missing_final_newline_is_refused_not_glued_onto_the_last_record(tmp_path):
+    led = _ledger_with_two_records(tmp_path)
+    p = tmp_path / "l.jsonl"
+    p.write_bytes(p.read_bytes().rstrip(b"\n"))
+    before = p.read_bytes()
+    with pytest.raises(LedgerTailError):
+        led.record(agent_id="a", session_id="s", policy_version="p", tool="t", categories=[], args={}, decision="allow")
+    assert p.read_bytes() == before
+    from auditrail.verifier import verify_all
+
+    assert verify_all(p)["status"] == "OK", "the two records are still good evidence"
+
+
+def test_f6_a_normal_ledger_and_an_empty_file_still_accept_writes(tmp_path):
+    led = _ledger_with_two_records(tmp_path)
+    led.record(agent_id="a", session_id="s", policy_version="p", tool="t", categories=[], args={}, decision="allow")
+    assert len(list(led)) == 3
+    (tmp_path / "new.jsonl").write_bytes(b"")
+    Ledger(tmp_path / "new.jsonl", fsync=False).record(agent_id="a", session_id="s", policy_version="p", tool="t",
+                                                         categories=[], args={}, decision="allow")
+
+
+def test_f6_the_recorder_reports_the_refusal_to_the_client(tmp_path):
+    from auditrail import RecorderService
+
+    led = _ledger_with_two_records(tmp_path)
+    p = tmp_path / "l.jsonl"
+    p.write_bytes(p.read_bytes()[:-5])
+    svc = RecorderService(led, heartbeat_s=0)
+    try:
+        reply = svc.handle_request({"op": "event", "kind": "heartbeat", "fields": {}})
+        assert reply["ok"] is False and "LedgerTailError" in reply["error"]
+    finally:
+        svc._server.server_close()
