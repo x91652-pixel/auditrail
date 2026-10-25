@@ -26,7 +26,13 @@ class RecordRejected(ValueError):
 
 
 def _text(v: Any, limit: int = MAX_TEXT) -> bool:
-    return isinstance(v, str) and len(v) <= limit
+    if not (isinstance(v, str) and len(v) <= limit):
+        return False
+    try:
+        v.encode("utf-8")  # a lone surrogate cannot be written, so it is refused here
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _int(v: Any) -> bool:

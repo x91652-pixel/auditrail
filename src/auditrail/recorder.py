@@ -245,15 +245,22 @@ class RecorderService:
             check_event(req.get("kind"), fields)
         with self._lock:
             self._received += 1
-        if op == "call":
-            rec = self.ledger.append_call(fields, origin="client")
+        try:
+            if op == "call":
+                rec = self.ledger.append_call(fields, origin="client")
+                with self._lock:
+                    self._tools.add(rec["tool"])
+            else:
+                kind = req.get("kind")
+                if kind not in EVENT_KINDS:
+                    return {"ok": False, "error": f"unsupported event kind {kind!r}"}
+                rec = self.ledger.record_event(kind, origin="client", **fields)
+        except BaseException:
+            # The record was not written and the client is told so: it is not a call the recorder took in and lost, so
+            # it must not show up as received-but-not-written in the recorder's own heartbeat.
             with self._lock:
-                self._tools.add(rec["tool"])
-        else:
-            kind = req.get("kind")
-            if kind not in EVENT_KINDS:
-                return {"ok": False, "error": f"unsupported event kind {kind!r}"}
-            rec = self.ledger.record_event(kind, origin="client", **fields)
+                self._received -= 1
+            raise
         with self._lock:
             self._written += 1
         return {"ok": True, "seq": rec["seq"], "hash": rec["hash"]}
