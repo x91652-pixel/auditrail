@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+# these tests wrap many tools without a category on purpose; the warning is not what they are about
+pytestmark = pytest.mark.filterwarnings("ignore:tool .* is wrapped with no category")
+
 from auditrail import (Guard, KeyRegistry, Ledger, PolicyEngine, RecorderService, RemoteLedger, ReplayGuard,
                        Signer)
 from auditrail.agent_bridge import send_envelope

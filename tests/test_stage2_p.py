@@ -1,6 +1,9 @@
 """P1-P3 follow-ups to the stage 2 review: lone surrogates, limits the library itself can reach, origin in the spec."""
 import pytest
 
+# these tests wrap many tools without a category on purpose; the warning is not what they are about
+pytestmark = pytest.mark.filterwarnings("ignore:tool .* is wrapped with no category")
+
 from auditrail import Ledger, RecorderService, Signer
 from auditrail.verifier import verify_all
 
