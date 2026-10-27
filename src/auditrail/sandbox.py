@@ -48,6 +48,7 @@ import warnings
 from typing import Any, Callable, Iterable, Optional
 
 RESULT_MARKER = "@@auditrail-result@@"  # must match _isolate_worker.RESULT_MARKER (not imported: see runpy)
+from ._schema import MAX_REASON
 from .ledger import Ledger
 from .policy import Decision, PolicyEngine, SessionState, UnclassifiedToolWarning, call_site_list
 
@@ -174,9 +175,15 @@ class Guard:
         with self._count_lock:
             self._recorded += 1
 
-    def _reason_for(self, exc: Exception) -> str:
+    def _reason_for(self, exc: BaseException) -> str:
         if self.record_error_text:
-            return f"{type(exc).__name__}: {exc}"
+            text = f"{type(exc).__name__}: {exc}"
+            if len(text) > MAX_REASON:
+                # the recorder signs a reason of at most MAX_REASON characters; keep the start and say what was cut
+                digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+                tail = f" ... [truncated from {len(text)} characters; full text sha256:{digest}]"
+                text = text[:MAX_REASON - len(tail)] + tail
+            return text
         digest = hashlib.sha256(str(exc).encode("utf-8")).hexdigest()
         return f"{type(exc).__name__} (message sha256:{digest[:16]})"
 
@@ -185,11 +192,19 @@ class Guard:
         with self._count_lock:
             attempted, recorded = self._attempted, self._recorded
             self._attempted = self._recorded = 0
-        self.ledger.record_heartbeat(
-            recorder_id=self.recorder_id, tools=sorted(self.tools), policy_version=self.policy.version,
-            policy_hash=self.policy.policy_hash, calls_attempted=attempted, calls_recorded=recorded,
-            interval_s=int(interval_s),
-        )
+        try:
+            self.ledger.record_heartbeat(
+                recorder_id=self.recorder_id, tools=sorted(self.tools), policy_version=self.policy.version,
+                policy_hash=self.policy.policy_hash, calls_attempted=attempted, calls_recorded=recorded,
+                interval_s=int(interval_s),
+            )
+        except BaseException:
+            # The heartbeat was not written, so the counts it took are still owed: put them back, otherwise calls that
+            # ran without evidence would be forgotten and the next heartbeat would read 0/0.
+            with self._count_lock:
+                self._attempted += attempted
+                self._recorded += recorded
+            raise
 
     def start_heartbeats(self, interval_s: int = 60) -> None:
         """Write a heartbeat now and every interval_s seconds from a daemon thread."""
@@ -309,7 +324,8 @@ class Guard:
             def wrapper(session: SessionState, *args: Any, **kwargs: Any) -> Any:
                 with self._count_lock:
                     self._attempted += 1
-                decision: Decision = self.policy.check(session, name, extra_categories=categories)
+                # check and reserve in one locked step: a second call admitted a moment later must see this one
+                decision: Decision = self.policy.admit(session, name, extra_categories=categories)
                 call_args = {"args": args, "kwargs": kwargs}
                 common = dict(agent_id=session.agent_id, session_id=session.session_id, trace_id=session.trace_id,
                               policy_version=self.policy.version, policy_hash=self.policy.policy_hash,
@@ -330,15 +346,22 @@ class Guard:
                         result = fn(*args, **kwargs)
                         effective_decision = "allow"
                 except Exception as exc:
-                    # A failed call may still have touched data before failing,
-                    # so it counts toward the workflow's trifecta state (conservative).
-                    self.policy.commit(session, name, extra_categories=categories)
+                    # The categories were reserved at admission (a failed call may have touched data first).
                     self._write(**common, decision="error", reason=self._reason_for(exc),
                                 duration_ms=(time.monotonic() - start) * 1000)
                     raise
+                except BaseException as exc:
+                    # SystemExit, KeyboardInterrupt, asyncio.CancelledError: not an Exception, but the tool may have
+                    # read data before it was interrupted. Its categories are already reserved; record it as an error
+                    # (best effort: a failing write must not hide the interrupt) and let the interrupt continue.
+                    try:
+                        self._write(**common, decision="error", reason=self._reason_for(exc),
+                                    duration_ms=(time.monotonic() - start) * 1000)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise
                 duration_ms = (time.monotonic() - start) * 1000
 
-                self.policy.commit(session, name, extra_categories=categories)
                 self._write(**common, decision=effective_decision, result=result, duration_ms=duration_ms)
                 return result
 

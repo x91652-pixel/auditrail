@@ -95,6 +95,12 @@ this writer's previous heartbeat), `interval_s`.
 `msg_digest` (SHA-256 of the canonical signed envelope), and for `a2a_recv` a
 `status` of `accepted` or `rejected`. See section 9.
 
+**`origin`** (optional, additive): a `call` or event record may carry `origin` with the value `"client"`. A recorder
+adds it, inside the signed record, to every record it wrote because a client asked for it; the recorder's own records
+(its heartbeats, for example) have no `origin`. A verifier hashes and checks the member like any other and attaches no
+meaning to it; what it implies about trust (the recorder signs a client's statement, not its own observation) is in
+SECURITY.md. It does not change the format version.
+
 ### 3.1 Hash
 
 ```

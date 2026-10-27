@@ -27,15 +27,29 @@ import hashlib
 import hmac
 import json
 import os
+import select
 import socket
 import socketserver
+import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 from .keys import Signer
-from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, call_fields
+from ._schema import RecordRejected, check_call, check_event  # noqa: F401
+from .ledger import EVENT_KINDS, EvidenceRecord, Ledger, LedgerTailError, call_fields
+
+
+# Limits on what the recorder will take from a connection before it has even checked the token. Conservative defaults:
+# a call record is a few hundred bytes (arguments and results are digests), so 1 MiB per line is far above any real
+# request; an idle client is dropped after 5 minutes (RemoteLedger reconnects by itself); 128 connections is many more
+# than the agents on one host that share a recorder. All three are constructor arguments of RecorderService.
+DEFAULT_MAX_LINE_BYTES = 1024 * 1024
+DEFAULT_CONNECTION_TIMEOUT_S = 300.0
+DEFAULT_MAX_CONNECTIONS = 128
+DEFAULT_PREAUTH_TIMEOUT_S = 10.0  # a connection must present a valid token within this long of connecting
 
 
 def _token_matches(supplied: Any, expected: str) -> bool:
@@ -89,6 +103,10 @@ class RecorderService:
         sink: Any = None,
         anchor_s: int = 0,
         recorder_id: str = "recorder",
+        max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+        connection_timeout_s: float = DEFAULT_CONNECTION_TIMEOUT_S,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        preauth_timeout_s: float = DEFAULT_PREAUTH_TIMEOUT_S,
     ):
         if host not in ("127.0.0.1", "::1", "localhost"):
             raise ValueError("the recorder only listens on a loopback address")
@@ -101,7 +119,13 @@ class RecorderService:
         self.sink = sink
         self.anchor_s = anchor_s
         self.recorder_id = recorder_id
+        self.max_line_bytes = int(max_line_bytes)
+        self.connection_timeout_s = float(connection_timeout_s)
+        self.max_connections = int(max_connections)
+        self.preauth_timeout_s = float(preauth_timeout_s)
+        self._unauthenticated: dict = {}  # socket -> time connected, for connections that have not shown the token
         self._lock = threading.Lock()
+        self._connections = 0
         self._received = 0
         self._written = 0
         self._tools: set[str] = set()
@@ -109,10 +133,57 @@ class RecorderService:
         service = self
 
         class Handler(socketserver.StreamRequestHandler):
+            timeout = service.connection_timeout_s  # an idle or stalled client is dropped, not waited on forever
+
             def handle(self) -> None:
-                for raw in self.rfile:
+                # A fixed deadline from connecting: a client that never shows the token is cut off even if it sends a
+                # byte now and then (which would restart a per-read socket timeout every time).
+                authed = service.token is None
+                deadline = time.monotonic() + service.preauth_timeout_s
+                state = {"authed": authed}
+
+                def expire() -> None:
+                    if not state["authed"]:
+                        try:
+                            self.connection.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+
+                timer = threading.Timer(service.preauth_timeout_s, expire)
+                timer.daemon = True
+                if not authed:
+                    timer.start()
+                try:
+                    self._serve(authed, deadline, state)
+                finally:
+                    timer.cancel()
+
+            def _serve(self, authed: bool, deadline: float, state: dict) -> None:
+                while True:
                     try:
-                        reply = service.handle_request(json.loads(raw.decode("utf-8")))
+                        if not authed:  # until a valid token is shown the connection lives on a short, fixed deadline
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                return
+                            self.connection.settimeout(min(remaining, service.connection_timeout_s))
+                        # at most max_line_bytes (+1 to tell "too long" from "exactly the limit") is ever buffered, and
+                        # this happens before the token is checked, so an unauthenticated client cannot make us hold more
+                        raw = self.rfile.readline(service.max_line_bytes + 1)
+                    except OSError:  # includes the read timeout
+                        return
+                    if not raw:
+                        return
+                    if len(raw) > service.max_line_bytes and not raw.endswith(b"\n"):
+                        return  # a request line longer than the limit: close the connection
+                    try:
+                        req = json.loads(raw.decode("utf-8"))
+                        if not authed and isinstance(req, dict) and _token_matches(req.get("token"), service.token):
+                            authed = True
+                            state["authed"] = True
+                            with service._lock:
+                                service._unauthenticated.pop(self.request, None)
+                            self.connection.settimeout(service.connection_timeout_s)
+                        reply = service.handle_request(req)
                     except Exception as exc:  # noqa: BLE001 - report to the client, keep serving
                         reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
                     self.wfile.write((json.dumps(reply) + "\n").encode("utf-8"))
@@ -121,6 +192,31 @@ class RecorderService:
         class Server(socketserver.ThreadingTCPServer):
             daemon_threads = True
             allow_reuse_address = True
+
+            def verify_request(self, request, client_address) -> bool:
+                with service._lock:
+                    if service._connections >= service.max_connections:
+                        if not service._unauthenticated:
+                            return False  # over the limit and everyone is authenticated: refuse the newcomer
+                        # make room by dropping the oldest connection that has not shown the token
+                        victim = min(service._unauthenticated, key=service._unauthenticated.get)
+                        service._unauthenticated.pop(victim, None)
+                        try:
+                            victim.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                    service._connections += 1
+                    if service.token is not None:
+                        service._unauthenticated[request] = time.monotonic()
+                return True
+
+            def process_request_thread(self, request, client_address) -> None:
+                try:
+                    super().process_request_thread(request, client_address)
+                finally:
+                    with service._lock:
+                        service._connections -= 1
+                        service._unauthenticated.pop(request, None)
 
         self._server = Server((host, port), Handler)
         self.address = self._server.server_address[:2]
@@ -138,18 +234,33 @@ class RecorderService:
         op = req.get("op")
         if op not in ("call", "event"):
             return {"ok": False, "error": f"unsupported op {op!r} (the recorder only appends)"}
+        fields = req.get("fields")
+        if fields is None:
+            fields = {}
+        # Only records of a fixed shape are signed, and those a client asked for are marked origin="client" (inside
+        # the signature). A request that is refused here is not counted as a call the recorder received.
+        if op == "call":
+            check_call(fields)
+        else:
+            check_event(req.get("kind"), fields)
         with self._lock:
             self._received += 1
-        fields = req.get("fields") or {}
-        if op == "call":
-            rec = self.ledger.append_call(fields)  # validates the exact field set
+        try:
+            if op == "call":
+                rec = self.ledger.append_call(fields, origin="client")
+                with self._lock:
+                    self._tools.add(rec["tool"])
+            else:
+                kind = req.get("kind")
+                if kind not in EVENT_KINDS:
+                    return {"ok": False, "error": f"unsupported event kind {kind!r}"}
+                rec = self.ledger.record_event(kind, origin="client", **fields)
+        except BaseException:
+            # The record was not written and the client is told so: it is not a call the recorder took in and lost, so
+            # it must not show up as received-but-not-written in the recorder's own heartbeat.
             with self._lock:
-                self._tools.add(rec["tool"])
-        else:
-            kind = req.get("kind")
-            if kind not in EVENT_KINDS:
-                return {"ok": False, "error": f"unsupported event kind {kind!r}"}
-            rec = self.ledger.record_event(kind, **fields)
+                self._received -= 1
+            raise
         with self._lock:
             self._written += 1
         return {"ok": True, "seq": rec["seq"], "hash": rec["hash"]}
@@ -160,11 +271,17 @@ class RecorderService:
             received, written = self._received, self._written
             self._received = self._written = 0
             tools = sorted(self._tools)
-        return self.ledger.record_heartbeat(
-            recorder_id=self.recorder_id, tools=tools, policy_version=self.policy_version,
-            policy_hash=self.policy_hash, calls_attempted=received, calls_recorded=written,
-            interval_s=self.heartbeat_s,
-        )
+        try:
+            return self.ledger.record_heartbeat(
+                recorder_id=self.recorder_id, tools=tools, policy_version=self.policy_version,
+                policy_hash=self.policy_hash, calls_attempted=received, calls_recorded=written,
+                interval_s=self.heartbeat_s,
+            )
+        except BaseException:
+            with self._lock:  # not written: the counts are still owed to the next heartbeat
+                self._received += received
+                self._written += written
+            raise
 
     def anchor(self) -> Optional[dict]:
         if not self.anchors_path:
@@ -231,23 +348,50 @@ class RemoteLedger:
         line = (json.dumps(req, ensure_ascii=False) + "\n").encode("utf-8")
         with self._lock:
             for attempt in (1, 2):
+                # Before the request is on the wire a failure is safe to retry: nothing was processed.
                 try:
+                    if self._sock is not None and self._peer_closed():
+                        self.close()  # an idle connection the recorder already dropped: reconnect, do not fail
                     if self._sock is None:
                         self._sock = socket.create_connection(self.address, timeout=self.timeout)
                         self._file = self._sock.makefile("rb")
                     self._sock.sendall(line)
-                    raw = self._file.readline()
-                    if not raw:
-                        raise ConnectionError("recorder closed the connection")
-                    reply = json.loads(raw.decode("utf-8"))
-                    break
                 except OSError as exc:
                     self.close()
                     if attempt == 2:
                         raise RecorderUnavailable(f"recorder at {self.address[0]}:{self.address[1]} unreachable: {exc}") from exc
+                    continue
+                # The request has been sent. From here on a failure is NOT retried: the recorder may already have
+                # written the record and only the reply was lost, and sending it again would write it twice.
+                try:
+                    raw = self._file.readline()
+                    if not raw:
+                        raise ConnectionError("recorder closed the connection")
+                    reply = json.loads(raw.decode("utf-8"))
+                except (OSError, ValueError) as exc:
+                    self.close()
+                    raise RecorderUnavailable(
+                        f"outcome unknown: the request was sent to {self.address[0]}:{self.address[1]} but no valid reply "
+                        f"came back ({type(exc).__name__}). The call may or may not have been recorded; it was not sent "
+                        "again. Check the ledger before repeating it.") from exc
+                break
         if not reply.get("ok"):
             raise RecorderUnavailable(f"recorder refused the record: {reply.get('error')}")
         return reply
+
+    def _peer_closed(self) -> bool:
+        """True if the recorder has closed (or reset) the idle connection, or sent something unexpected on it.
+
+        select() says "readable" on a socket whose peer closed it; MSG_PEEK then reads nothing off the queue. Both
+        steps work on Windows and on POSIX. A reset that happens after this check, in the moment before sendall, is
+        not caught here and is reported as an unknown outcome."""
+        try:
+            readable, _, _ = select.select([self._sock], [], [], 0)
+            if not readable:
+                return False
+            return True  # EOF, a reset, or stray bytes: in every case the connection is not usable for a new request
+        except (OSError, ValueError):
+            return True
 
     def close(self) -> None:
         try:
@@ -328,10 +472,15 @@ def serve(args) -> int:
         print("[RECORDER][WARN] no token: any local process that can reach the port can write to the ledger. "
               "Set the token environment variable.", flush=True)
     anchor_every = args.anchor_every if args.anchor_every is not None else (300 if args.anchors else 0)
-    svc = RecorderService(
-        ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,
-        heartbeat_s=args.heartbeat, anchors_path=args.anchors, sink=sink, anchor_s=anchor_every,
-    ).start()
+    try:
+        svc = RecorderService(
+            ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,
+            heartbeat_s=args.heartbeat, anchors_path=args.anchors, sink=sink, anchor_s=anchor_every,
+        ).start()
+    except LedgerTailError as exc:
+        # the first heartbeat is the first write, so a ledger that ends in the middle of a line is found here
+        print("[ERROR] " + " ".join(str(exc).split()), file=sys.stderr, flush=True)
+        return 2
     if args.anchors and anchor_every:
         svc.anchor()  # one right away, so a recorder killed early still left something behind
     host, port = svc.address

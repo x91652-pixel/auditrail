@@ -104,7 +104,8 @@ already use.
   up to the last anchor, provided the witness is independent of the operator.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
-  periods, tool/policy changes, and calls that ran without evidence show up.
+  periods, tool/policy changes, and calls that ran without evidence show up while the writer is alive (a process that
+  dies inside a tool leaves no record and no count; a heartbeat written on a client's request carries `origin: "client"`, the recorder's own does not; see [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md)).
 - **Independent implementation of the verifier.** `verifier/` is a separate Rust program, written from the
   [public format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md) and tested against the same
   conformance vectors as the Python code. One offline binary, no network. It was written by the
@@ -479,7 +480,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 931 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+All 998 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](https://github.com/x91652-pixel/auditrail/tree/main/docs/spec/vectors) through the independent verifier) and

@@ -19,7 +19,7 @@ from .recorder import RecorderService, RemoteLedger
 from .reconcile import reconcile
 from .verifier import verify_all
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "Ledger",

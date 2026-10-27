@@ -39,7 +39,7 @@ CI（GitHub Actions）在 PR #1 / #2 / #3 合併前全部成功；`verifier` job
 
 | 指令 | 結果 |
 |---|---|
-| `pytest -q -rs` | **927 通過、0 失敗、4 跳過**（條件：Windows、已建置 Rust 執行檔、本機 `pytest -q -rs`；860 是由收集數 931 減 4 個已知跳過推算，未逐次實測。CI 的 Python job 不建置 Rust，所以 PR #9 的 CI 日誌顯示 Windows 712 通過／124 跳過、Ubuntu 678 通過／158 跳過（合計 836 = 當時的收集數），之後新增的測試會改變這些數字）**（`test_sink_robustness.py:64`（需要非 root 的 POSIX）、`test_phase1_defaults.py:361` 與 `test_t010b_recorder.py:108`，各只在 POSIX 執行；`test_report_r4.py:58` 需要 POSIX 的唯讀目錄語意；另有只在 Windows 執行的 ACL 測試，在 POSIX 上會跳過）；共收集 931 個 |
+| `pytest -q -rs` | **994 通過、0 失敗、4 跳過**（條件：Windows、已建置 Rust 執行檔、本機 `pytest -q -rs`，994 通過是 2026-10-25 在 fix-stage2 全套實測；移走 Rust 執行檔時為 871 通過、127 跳過。CI 的 Python job 不建置 Rust，所以 PR #9 的 CI 日誌顯示 Windows 712 通過／124 跳過、Ubuntu 678 通過／158 跳過（合計 836 = 當時的收集數），之後新增的測試會改變這些數字）**（`test_sink_robustness.py:64`（需要非 root 的 POSIX）、`test_phase1_defaults.py:361` 與 `test_t010b_recorder.py:108`，各只在 POSIX 執行；`test_report_r4.py:58` 需要 POSIX 的唯讀目錄語意；另有只在 Windows 執行的 ACL 測試，在 POSIX 上會跳過）；共收集 998 個 |
 | `cd verifier && cargo test --locked --release` | robust 2 通過、vectors 2 通過 |
 
 沒有 Rust 執行檔時，`test_policy_hash.py` 的 9 個 Rust 對照測試會**明確 skip**（`pytest.skip`），不再算通過。Linux 與 Python 3.10 從未在本機執行。
@@ -258,7 +258,7 @@ SECURITY 與模擬的**不一致處**：沒有行為上的不一致。只有一�
 
 | 位置 | 現在 | 判斷 |
 |---|---|---|
-| `pyproject.toml` / `verifier/Cargo.toml` / `auditrail.__version__` | 0.3.0 | 一致 |
+| `pyproject.toml` / `verifier/Cargo.toml` / `auditrail.__version__` | 0.3.1 | 一致 |
 | README 徽章、Status、標題 | v0.2 | 一致 |
 | **GitHub repo 簡介**（Settings → About） | 「…(v0.1 proof of concept)」 | **不一致**；這是 GitHub 設定，不在 repo 檔案內。已列出修正指令，但沒有執行（對外可見的變更，需要你同意） |
 | `docs/x-announcement.md` | 已從 repo 刪除 | 這是 v0.1 時代的貼文草稿，內容已不符合 v0.2；貼文草稿不放在公開 repo。 |
