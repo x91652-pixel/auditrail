@@ -4,7 +4,7 @@ auditrail is an early-stage project (an early v0.3.x release, no independent sec
 document exists so nobody -- including us -- overestimates what it does. Each
 claim in the "does" column is covered by at least one test (named in
 [docs/STATUS.md](docs/STATUS.md)), **except for the cases listed under "Where the
-tests do not reach" below**; every gap we know of is in the "does not" section. It maps features to the OWASP Top 10 for Agentic Applications 2026
+tests do not reach" below**; the gaps we know of are listed in four places: the "does not" section, "Where the tests do not reach", the "what still remains" column of the opt-in hardening table, and "Smaller known issues". It maps features to the OWASP Top 10 for Agentic Applications 2026
 (ASI01-ASI10) and to the "lethal trifecta" framework (Simon Willison).
 
 **The one-sentence version:** auditrail makes a record of what an agent did that
@@ -169,3 +169,8 @@ covered). The verifier still reads a file that lacks only its final newline as t
 - The categories in an agent-to-agent message are declared (and signed) by the sender. A sender that leaves out a
   category it touched gives the receiver no way to inherit it: "a split trifecta is still a trifecta" holds only when
   senders declare honestly.
+- `auditrail recorder --policy FILE` with a policy that cannot be loaded (invalid, or refused by the alias limit)
+  ends with a Python traceback from `PolicyError` instead of a one-line message and a defined exit code. It does not
+  start; `auditrail lint` is the command that reports such a file cleanly (exit 1).
+- Publishing an anchor with `--git-repo` runs `git add` and `git commit` in the witness repository, so that
+  repository's own hooks are executed by git. Use `--git-repo` only with a repository you trust.
