@@ -1,10 +1,10 @@
 # Security model and scope
 
-auditrail is an early-stage project (v0.2, no independent security review). This
+auditrail is an early-stage project (an early v0.3.x release, no independent security review). This
 document exists so nobody -- including us -- overestimates what it does. Each
 claim in the "does" column is covered by at least one test (named in
 [docs/STATUS.md](docs/STATUS.md)), **except for the cases listed under "Where the
-tests do not reach" below**; every gap we know of is in the "does not" section. It maps features to the OWASP Top 10 for Agentic Applications 2026
+tests do not reach" below**; the gaps we know of are listed in four places: the "does not" section, "Where the tests do not reach", the "what still remains" column of the opt-in hardening table, and "Smaller known issues". It maps features to the OWASP Top 10 for Agentic Applications 2026
 (ASI01-ASI10) and to the "lethal trifecta" framework (Simon Willison).
 
 **The one-sentence version:** auditrail makes a record of what an agent did that
@@ -114,6 +114,10 @@ before. **Four are behavior changes that apply by default** (labels that contrad
 | Recorder connection limits (`RecorderService`) | A request line longer than `max_line_bytes` (default 1 MiB) closes the connection, before the token is looked at and without buffering more than the limit; a connection idle or stalled for `connection_timeout_s` (default 300 s) is closed; more than `max_connections` (default 128) simultaneous connections are refused, except that a connection that has not yet shown the token is dropped to make room (the oldest first); a connection that has not shown a valid token within `preauth_timeout_s` (default 10 s) of connecting is closed, however many bytes it has sent, so the idle-timeout above applies only after the token was shown. A recorder started without a token has no pre-authentication deadline (nobody has to show anything), so enough idle connections can still make a legitimate agent wait or be refused for a while; that mode already lets any local process write. `RemoteLedger` reconnects by itself after an idle close. Before, one line of any size was buffered in memory before the token was checked, and every connection took a thread. | The four values are arguments of `RecorderService(...)`; raise them there. The `auditrail recorder` command uses the defaults. |
 | Appending to a ledger that does not end in a newline (`Ledger`, the recorder) | `LedgerTailError`: nothing is written and the file is not changed. Before, a torn last record made every later append fail, and a missing newline made the next record share a line with the last one. | Restore or move the file and start a new one; see "A ledger that ends in the middle of a line". There is deliberately no switch to append anyway. |
 | `auditrail verify --anchors FILE` with a FILE that does not exist (Python CLI) | One line `[ERROR] FILE: file not found` (or `not a file` for a directory) on stderr and **exit code 2**, no result. Before: `OK`, as if no anchors had been made yet, which hid a mistyped path. A witness copy, or an anchors file that is a regular file but cannot be read (a lock, permissions), is `SINK_UNREACHABLE` (inconclusive, exit 1) instead of an uncaught error; a directory given to `--anchors` is an `[ERROR]` (`not a file`) with exit 2. | Leave out `--anchors` to verify without anchors. The library function `verify_anchors` still treats a missing file as no anchors; only the command line changed. |
+| Policy YAML with aliases (`PolicyEngine.from_yaml`, `auditrail lint`, `recorder --policy`) | A policy that expands to more than 100,000 nodes once aliases are resolved, or that contains a recursive alias, is refused with `PolicyError` before it is built or hashed. Policies below the limit load and hash exactly as before. | Remove the aliases or shrink the file. The limit counts nodes, not bytes: see "Smaller known issues". |
+| `auditrail lint` with a file that cannot be read (Python CLI) | `[ERROR] FILE: cannot be read: ...` and **exit code 2** (printed on standard output). A file that can be read but is not a valid policy, including one that is not valid UTF-8, is still `[INVALID]` and exit code 1. Before, both were exit code 1. | Check the path, or treat 2 like 1 in a script. |
+| `auditrail keygen --out PREFIX` when `PREFIX.pub` already exists | `[REFUSED]` and exit code 1, even when `PREFIX.key` does not exist; nothing is written. Before, the existing public key was overwritten. | Choose another prefix, or move the old `.pub` away yourself. |
+| Errors while parsing policy YAML (`PolicyEngine.from_yaml`) | Always raised as `PolicyError`. Before, a malformed file raised a `yaml.YAMLError` subclass (`ScannerError`, `ComposerError`, `ConstructorError`); library code that catches `yaml.YAMLError` around `from_yaml` no longer catches it. `lint` is unaffected (exit code 1). | Catch `PolicyError` (a `ValueError`). |
 
 Not changed: an empty category list is still not a declaration in strict mode, and without strict mode a tool with no
 category still runs (with a warning when it is wrapped).
@@ -124,7 +128,7 @@ category still runs (with a warning when it is wrapped).
 1. Generate the recorder key where the agent cannot read it: `auditrail keygen --out keys/recorder`.
 2. Run the recorder as its own process/OS user (`auditrail recorder --key ... --ledger ...`). Agents use `RemoteLedger`, which can only append and never sees the key.
 3. Publish the **public** key (`recorder.pub`) with the first anchor, somewhere the operator cannot silently change. Verifiers pass it with `--pubkey`.
-4. Publish anchors to a witness at a cadence that bounds how much tail you accept losing.
+4. Publish anchors to a witness at a cadence that bounds how much tail you accept losing. Publishing an anchor with `--git-repo` runs `git add` and `git commit` in the witness repository, so that repository's hooks are executed: use `--git-repo` only with a repository you trust.
 5. Rotate by anchoring under both keys for an overlap, then retire the old one.
 
 ## Version history of this document's claims
@@ -169,3 +173,13 @@ covered). The verifier still reads a file that lacks only its final newline as t
 - The categories in an agent-to-agent message are declared (and signed) by the sender. A sender that leaves out a
   category it touched gives the receiver no way to inherit it: "a split trifecta is still a trifecta" holds only when
   senders declare honestly.
+- `auditrail recorder --policy FILE` with a policy that cannot be loaded (invalid, or refused by the alias limit)
+  ends with a Python traceback from `PolicyError` instead of a one-line message and a defined exit code. It does not
+  start; `auditrail lint` is the command that reports such a file cleanly (exit 1).
+- Publishing an anchor with `--git-repo` runs `git add` and `git commit` in the witness repository, so that
+  repository's own hooks are executed by git. Use `--git-repo` only with a repository you trust.
+- The policy alias limit counts nodes (100,000 after aliases are resolved), not bytes. A few nodes holding a large
+  string can still be multiplied by aliases: a 0.30 MB file that expands to about 387 MB was accepted in 4.7 seconds
+  (measured by the reviewer). Load only policy files you trust. A limit on the expanded length is a follow-up.
+- If `RecorderService.stop()` takes its final heartbeat while a request is still being written, that request is
+  written to the ledger but is not counted by any heartbeat, because there is no later one.

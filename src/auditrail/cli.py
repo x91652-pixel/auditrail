@@ -165,6 +165,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 def cmd_policy_lint(args: argparse.Namespace) -> int:
     try:
         engine = PolicyEngine.from_yaml(args.policy_path)
+    except OSError as exc:  # not found, a directory, no permission: the file could not be checked at all
+        print(f"[ERROR] {args.policy_path}: cannot be read: {exc}")
+        return 2
     except Exception as exc:  # noqa: BLE001
         print(f"[INVALID] {args.policy_path}: {exc}")
         return 1

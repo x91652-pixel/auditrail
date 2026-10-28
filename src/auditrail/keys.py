@@ -81,6 +81,8 @@ class Signer:
         pub_path = prefix.with_name(prefix.name + ".pub")
         if key_path.exists():
             raise FileExistsError(f"{key_path} already exists; refusing to overwrite a private key")
+        if pub_path.exists():  # a published public key may be the only copy others verify against
+            raise FileExistsError(f"{pub_path} already exists; refusing to overwrite a public key")
         fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(self.seed_hex() + "\n")
