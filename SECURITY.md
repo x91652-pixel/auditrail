@@ -1,6 +1,6 @@
 # Security model and scope
 
-auditrail is an early-stage project (v0.2, no independent security review). This
+auditrail is an early-stage project (an early v0.3.x release, no independent security review). This
 document exists so nobody -- including us -- overestimates what it does. Each
 claim in the "does" column is covered by at least one test (named in
 [docs/STATUS.md](docs/STATUS.md)), **except for the cases listed under "Where the
@@ -124,7 +124,7 @@ category still runs (with a warning when it is wrapped).
 1. Generate the recorder key where the agent cannot read it: `auditrail keygen --out keys/recorder`.
 2. Run the recorder as its own process/OS user (`auditrail recorder --key ... --ledger ...`). Agents use `RemoteLedger`, which can only append and never sees the key.
 3. Publish the **public** key (`recorder.pub`) with the first anchor, somewhere the operator cannot silently change. Verifiers pass it with `--pubkey`.
-4. Publish anchors to a witness at a cadence that bounds how much tail you accept losing.
+4. Publish anchors to a witness at a cadence that bounds how much tail you accept losing. Publishing an anchor with `--git-repo` runs `git add` and `git commit` in the witness repository, so that repository's hooks are executed: use `--git-repo` only with a repository you trust.
 5. Rotate by anchoring under both keys for an overlap, then retire the old one.
 
 ## Version history of this document's claims
