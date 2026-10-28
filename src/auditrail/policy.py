@@ -144,6 +144,63 @@ class PolicyError(ValueError):
     pass
 
 
+#: Most nodes a policy file may expand to once YAML aliases are resolved. A real policy is a few hundred;
+#: a "billion laughs" file is a few hundred bytes that expands to millions, so it is refused before it is built.
+MAX_POLICY_NODES = 100_000
+
+
+def load_policy_yaml(text: str):
+    """Parse policy YAML (safe loader), refusing alias expansion beyond MAX_POLICY_NODES nodes.
+
+    The node graph is composed first and its expanded size counted without expanding it, so a file that
+    would blow up is refused in linear time and memory, before anything is built or hashed."""
+    if yaml is None:
+        raise RuntimeError("pyyaml is required to load policy files: pip install pyyaml")
+    loader = yaml.SafeLoader(text)
+    try:
+        root = loader.get_single_node()
+        if root is None:
+            return None
+        sizes: dict = {}
+        active: set = set()
+
+        def size(node) -> int:
+            key = id(node)
+            if key in sizes:
+                return sizes[key]
+            if key in active:
+                raise PolicyError("policy YAML contains a recursive alias")
+            active.add(key)
+            total = 1
+            if isinstance(node, yaml.SequenceNode):
+                for child in node.value:
+                    total += size(child)
+                    if total > MAX_POLICY_NODES:
+                        break
+            elif isinstance(node, yaml.MappingNode):
+                for k, v in node.value:
+                    total += size(k) + size(v)
+                    if total > MAX_POLICY_NODES:
+                        break
+            active.discard(key)
+            total = min(total, MAX_POLICY_NODES + 1)
+            sizes[key] = total
+            return total
+
+        try:
+            n = size(root)
+        except RecursionError:
+            raise PolicyError("policy YAML is nested too deeply") from None
+        if n > MAX_POLICY_NODES:
+            raise PolicyError(f"policy YAML expands to more than {MAX_POLICY_NODES} nodes once aliases are "
+                              "resolved; remove the aliases or shrink the file")
+        return loader.construct_document(root)
+    except yaml.YAMLError as exc:
+        raise PolicyError(f"policy YAML cannot be parsed: {exc}") from exc
+    finally:
+        loader.dispose()
+
+
 class PolicyEngine:
     def __init__(self, config: dict, strict: Optional[bool] = None):
         if not isinstance(config, dict):
@@ -177,7 +234,7 @@ class PolicyEngine:
     def from_yaml(cls, path: str, strict: Optional[bool] = None) -> "PolicyEngine":
         if yaml is None:
             raise RuntimeError("pyyaml is required to load policy files: pip install pyyaml")
-        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        data = load_policy_yaml(Path(path).read_text(encoding="utf-8"))
         return cls(data, strict=strict)
 
     @staticmethod
