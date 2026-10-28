@@ -64,3 +64,12 @@ def test_t085_lint_unreadable_file_exits_2_and_invalid_policy_exits_1(tmp_path, 
     bad.write_text("agents: {}\n", encoding="utf-8")
     assert main(["lint", str(bad)]) == 1
 
+
+def test_t085_keygen_refuses_to_overwrite_an_existing_pub_even_without_a_key(tmp_path, capsys):
+    prefix = tmp_path / "k"
+    pub = tmp_path / "k.pub"
+    pub.write_text("keep me\n", encoding="utf-8")
+    assert main(["keygen", "--out", str(prefix)]) == 1
+    assert "[REFUSED]" in capsys.readouterr().out
+    assert pub.read_text(encoding="utf-8") == "keep me\n"
+    assert not (tmp_path / "k.key").exists(), "no private key may be left behind by a refused keygen"
