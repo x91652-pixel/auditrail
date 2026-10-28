@@ -259,7 +259,7 @@ SECURITY 與模擬的**不一致處**：沒有行為上的不一致。只有一�
 | 位置 | 現在 | 判斷 |
 |---|---|---|
 | `pyproject.toml` / `verifier/Cargo.toml` / `auditrail.__version__` | 0.3.1 | 一致 |
-| README 徽章、Status、標題 | v0.2 | 一致 |
+| README 徽章、Status、標題 | v0.3 | 一致 |
 | **GitHub repo 簡介**（Settings → About） | 「…(v0.1 proof of concept)」 | **不一致**；這是 GitHub 設定，不在 repo 檔案內。已列出修正指令，但沒有執行（對外可見的變更，需要你同意） |
 | `docs/x-announcement.md` | 已從 repo 刪除 | 這是 v0.1 時代的貼文草稿，內容已不符合 v0.2；貼文草稿不放在公開 repo。 |
 | `dashboard/Cargo.toml` | 0.1.0 | 獨立元件，版本號自成一套；不視為錯誤，但需要決定是否與主版本同步 |
@@ -268,7 +268,7 @@ SECURITY 與模擬的**不一致處**：沒有行為上的不一致。只有一�
 修正 repo 簡介的指令（**尚未執行**）：
 
 ```bash
-gh repo edit x91652-pixel/auditrail --description "Verifiable evidence layer for AI agents: signed, anchored audit trails and a lethal-trifecta policy guard (v0.2, early)"
+gh repo edit x91652-pixel/auditrail --description "Verifiable evidence layer for AI agents: signed, anchored audit trails and a lethal-trifecta policy guard (v0.3, early)"
 ```
 
 ## 6. README / SECURITY / ROADMAP 與實際不符之處

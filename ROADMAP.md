@@ -1,6 +1,6 @@
 # Roadmap
 
-v0.2 closes the biggest gap in v0.1: a hash chain anyone with write access could
+v0.2 closed the biggest gap in v0.1: a hash chain anyone with write access could
 recompute. It now has recorder signatures, signed anchors with a witness, heartbeats,
 an independent verifier, workflow-level policy, and per-agent signed messages.
 What is left is mostly about *where the trust lives* and *what the evidence covers*.
