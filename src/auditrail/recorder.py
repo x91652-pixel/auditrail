@@ -128,6 +128,7 @@ class RecorderService:
         self._connections = 0
         self._received = 0
         self._written = 0
+        self._inflight = 0  # counted in _received, outcome (written or refused) not yet known
         self._tools: set[str] = set()
         self._stop = threading.Event()
         service = self
@@ -245,6 +246,7 @@ class RecorderService:
             check_event(req.get("kind"), fields)
         with self._lock:
             self._received += 1
+            self._inflight += 1
         try:
             if op == "call":
                 rec = self.ledger.append_call(fields, origin="client")
@@ -260,16 +262,21 @@ class RecorderService:
             # it must not show up as received-but-not-written in the recorder's own heartbeat.
             with self._lock:
                 self._received -= 1
+                self._inflight -= 1
             raise
         with self._lock:
             self._written += 1
+            self._inflight -= 1
         return {"ok": True, "seq": rec["seq"], "hash": rec["hash"]}
 
     # ------------------------------------------------------------ background work
     def heartbeat(self) -> EvidenceRecord:
         with self._lock:
-            received, written = self._received, self._written
-            self._received = self._written = 0
+            # A request still being written is counted in _received but not yet in _written; reporting it now
+            # would show a call without evidence that is not one. It stays owed to the next heartbeat.
+            received, written = self._received - self._inflight, self._written
+            self._received -= received
+            self._written = 0
             tools = sorted(self._tools)
         try:
             return self.ledger.record_heartbeat(
