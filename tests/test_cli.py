@@ -54,3 +54,13 @@ def test_lint_invalid(tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 1
     assert "[INVALID]" in out
+
+
+def test_t085_lint_unreadable_file_exits_2_and_invalid_policy_exits_1(tmp_path, capsys):
+    assert main(["lint", str(tmp_path / "missing.yaml")]) == 2
+    assert "[ERROR]" in capsys.readouterr().out
+    assert main(["lint", str(tmp_path)]) == 2  # a directory cannot be read either
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("agents: {}\n", encoding="utf-8")
+    assert main(["lint", str(bad)]) == 1
+
