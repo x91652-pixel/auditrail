@@ -187,3 +187,11 @@ covered). The verifier still reads a file that lacks only its final newline as t
   (measured by the reviewer). Load only policy files you trust. A limit on the expanded length is a follow-up.
 - If `RecorderService.stop()` takes its final heartbeat while a request is still being written, that request is
   written to the ledger but is not counted by any heartbeat, because there is no later one.
+- **The PyPI package has no provenance attestation.** It is built and uploaded by hand by the maintainer
+  (`twine`, from a clean build of the release tag; see [docs/RELEASING.md](docs/RELEASING.md)), not by a CI workflow,
+  so PyPI holds no attestation tying a file to this repository. To check a download yourself: `pip download
+  auditrail==X.Y.Z --no-deps` (and again with `--no-binary :all:` for the sdist), compare the sha256 of each file with
+  the one PyPI shows for that release, then compare the files with the tag: unpack the sdist and the wheel and compare
+  each `.py`, `.md` and `.toml` file byte for byte with `git archive vX.Y.Z` (use `git -c core.autocrlf=false`
+  so line endings are not changed). This shows that the contents match the tag; it does not show who uploaded them,
+  and the archives themselves are not reproducible byte for byte (the sdist carries build-time timestamps).
