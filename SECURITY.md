@@ -75,8 +75,12 @@ Stated so that "has a test" is not read as "is verified everywhere":
   no test that rotates a key and verifies across the overlap.
 - **Timestamping services as a witness.** The anchors row lists one as an example of an independent copy; no
   timestamping witness is implemented (RFC 3161 is on the roadmap). Only file and git witnesses exist and are tested.
-- **The release workflow** (`release.yml`) has never run on GitHub, so the prebuilt binaries, checksums and
-  attestations described in the README are unproven. `verify --git-repo` through the CLI has no test of its own.
+- **The release workflow** (`release.yml`) has run successfully on GitHub for v0.3.0, v0.3.1 and v0.3.2. The four
+  prebuilt binaries carry a SLSA build-provenance attestation (GitHub artifact attestation). `SHA256SUMS` itself is
+  not signed or attested, so check what you download yourself with the `sha256sum` and `gh attestation verify`
+  steps in the README. That the Windows binary comes out byte-identical on different machines is **not** verified:
+  the toolchain and build paths differ, and a reviewer measured different hashes. `verify --git-repo` through the CLI
+  has no test of its own.
 - **Tests that need the Rust binary** skip with an explicit reason when it is not built; a green run without it says
   nothing about Python/Rust agreement.
 - **The Windows ACL check** reads only the broad groups (see the recorder row below); a loose permission it cannot see passes. It also does not look at the **parent directory** of the ledger or key, and a grant to one specific other account (as opposed to Everyone/Users/Authenticated Users/Guests/Anonymous) is not flagged. The check **failed outright when pytest was started from PowerShell 7** (the child Windows PowerShell 5.1 inherited PS7's module path and could not load `Get-Acl`); it now uses .NET calls only, drops the inherited `PSModulePath` and starts 5.1 by its system path, and this is verified only by a local simulation and by CI, not by every host setup. A PowerShell run that *succeeds but prints nothing parseable* is now treated as `NOT CHECKED` (the recorder refuses to start without `--allow-loose-permissions`); that case used to pass silently. A line that mentions a broad group (its SID or name) but is not a well-formed entry (non-numeric or hex rights, a missing or extra column, spaces around the `|`, lower-case `allow`, garbage around the SID) also makes the file `NOT CHECKED`, however many good lines are next to it. **Lines that mention no broad group and are malformed are ignored**: they cannot be told apart from noise, and the check does not claim to have read them.
@@ -183,3 +187,11 @@ covered). The verifier still reads a file that lacks only its final newline as t
   (measured by the reviewer). Load only policy files you trust. A limit on the expanded length is a follow-up.
 - If `RecorderService.stop()` takes its final heartbeat while a request is still being written, that request is
   written to the ledger but is not counted by any heartbeat, because there is no later one.
+- **The PyPI package has no provenance attestation.** It is built and uploaded by hand by the maintainer
+  (`twine`, from a clean build of the release tag; see [docs/RELEASING.md](docs/RELEASING.md)), not by a CI workflow,
+  so PyPI holds no attestation tying a file to this repository. To check a download yourself: `pip download
+  auditrail==X.Y.Z --no-deps` (and again with `--no-binary :all:` for the sdist), compare the sha256 of each file with
+  the one PyPI shows for that release, then compare the files with the tag: unpack the sdist and the wheel and compare
+  each `.py`, `.md` and `.toml` file byte for byte with `git archive vX.Y.Z` (use `git -c core.autocrlf=false`
+  so line endings are not changed). This shows that the contents match the tag; it does not show who uploaded them,
+  and the archives themselves are not reproducible byte for byte (the sdist carries build-time timestamps).
