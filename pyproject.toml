@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "wei chan" }]
-keywords = ["ai-agents", "audit", "security", "mcp", "prompt-injection", "compliance"]
+keywords = ["ai-agents", "audit", "security", "mcp", "prompt-injection", "audit-log"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
