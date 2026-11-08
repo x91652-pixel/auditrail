@@ -500,7 +500,7 @@ python -m examples.logistics_sim.run
 ```
 
 Results and the reasoning behind each scenario are in
-[docs/simulation.md](https://github.com/x91652-pixel/auditrail/blob/main/docs/simulation.md).
+[docs/simulation.md](https://github.com/x91652-pixel/auditrail/blob/main/docs/simulation.md) (written in Chinese).
 
 ## Contributing
 
