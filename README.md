@@ -27,7 +27,7 @@ links below point there. To work from a source checkout, see the [Quickstart](ht
 > **Status and what this is not.** Early (v0.3), with no independent security review. The evidence
 > format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
 > agree, not yet that the format is right. It is not a certified compliance product. What it deliberately does not
-> do is listed in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md); read that before deciding whether it fits.
+> do is listed in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md). Read that before deciding whether it fits.
 
 [![test](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml)
 ![status](https://img.shields.io/badge/status-v0.3_early-orange)
@@ -105,7 +105,7 @@ already use.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up while the writer is alive (a process that
-  dies inside a tool leaves no record and no count; a heartbeat written on a client's request carries `origin: "client"`, the recorder's own does not; see [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md)).
+  dies inside a tool leaves no record and no count; a heartbeat written on a client's request carries `origin: "client"`, the recorder's own does not). See [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md).
 - **Independent implementation of the verifier.** `verifier/` is a separate Rust program, written from the
   [public format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md) and tested against the same
   conformance vectors as the Python code. One offline binary, no network. It was written by the
