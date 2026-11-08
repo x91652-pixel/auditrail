@@ -32,8 +32,13 @@ set.
 - Record the file names, sizes and sha256.
 - Compare every `.py`, `.md` and `.toml` file in the wheel and sdist with the tag's files, byte for byte; confirm no
   CRLF (other than in `METADATA`/`PKG-INFO`) and that the files contain no personal data or local paths.
+  The sdist also holds `PKG-INFO` and an `.egg-info` folder that are generated at build time and are not in the tag:
+  skip them when comparing with the tag.
 - Install the wheel into a new virtual environment; check `python -c "import auditrail; print(auditrail.__version__)"`
   and `auditrail demo`.
+
+When checking the binaries of a GitHub Release, `gh attestation verify` prints no text when it is not run in a
+terminal (in a script or CI); read its exit code (0 means verified) instead of looking for output.
 
 ## 4. Upload (the maintainer, personally)
 
