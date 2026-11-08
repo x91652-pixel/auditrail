@@ -480,7 +480,7 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 998 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+The Python test suite (a few tests run only on POSIX and several only on Windows, the others everywhere) is deterministic and requires no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](https://github.com/x91652-pixel/auditrail/tree/main/docs/spec/vectors) through the independent verifier) and
