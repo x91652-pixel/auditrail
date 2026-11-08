@@ -88,7 +88,6 @@ Stated so that "has a test" is not read as "is verified everywhere":
 - **Cross-section label consistency is enforced when a tool is wrapped** (`Guard.guarded_tool`). Calling `PolicyEngine.check` directly, without a Guard, does not compare sections, and an inconsistent policy still *loads*. (Pinned by `tests/test_t015_known_limits.py`.)
 - **Duplicate YAML keys are not reported**: PyYAML keeps the last one, so a second `tool_categories:` (or `allowed_tools:`) in the same section silently replaces the first. Review policy files like code. (Pinned by `tests/test_t015_known_limits.py`.)
 - **Shutdown paths not exercised**: the recorder's clean shutdown is tested with Ctrl+Break on Windows and, unrun, SIGTERM on POSIX. A console-close event (`CTRL_CLOSE_EVENT`) and a service-manager stop have not been tried; they may skip the final heartbeat and anchor.
-  see passes.
 
 ## Opt-in hardening: what it mitigates and what remains
 
