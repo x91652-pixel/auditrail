@@ -3,7 +3,7 @@
 auditrail is an early-stage project (an early v0.3.x release, no independent security review). This
 document exists so nobody -- including us -- overestimates what it does. Each
 claim in the "does" column is covered by at least one test (named in
-[docs/STATUS.md](docs/STATUS.md)), **except for the cases listed under "Where the
+[docs/STATUS.md](docs/STATUS.md), in Chinese), **except for the cases listed under "Where the
 tests do not reach" below**; the gaps we know of are listed in four places: the "does not" section, "Where the tests do not reach", the "what still remains" column of the opt-in hardening table, and "Smaller known issues". It maps features to the OWASP Top 10 for Agentic Applications 2026
 (ASI01-ASI10) and to the "lethal trifecta" framework (Simon Willison).
 
@@ -11,7 +11,7 @@ tests do not reach" below**; the gaps we know of are listed in four places: the 
 the operator cannot quietly rewrite, *if you keep the signing key and a witness
 copy out of the operator's reach* -- and it tells you plainly what it did not check.
 
-## What v0.2 does
+## What it does
 
 | Feature | Maps to | What it proves, and the condition |
 |---|---|---|
@@ -24,7 +24,7 @@ copy out of the operator's reach* -- and it tells you plainly what it did not ch
 | Per-agent Ed25519 messages, receipts, `reconcile` | ASI07 | A message is attributable to one agent (not "anyone with the shared secret"), is bound to its recipient, and both sides' ledgers can be cross-checked for a message only one side recorded. |
 | Process-isolated tools (`isolate=True`) | partial ASI05 | Runs a call in a subprocess with an **allow-listed** environment and a timeout. Reduces accidents and ambient-secret leakage. |
 
-## What v0.2 does NOT do
+## What it does NOT do
 
 Be skeptical of any tool (including this one) that does not say this part out loud.
 

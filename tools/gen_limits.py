@@ -23,7 +23,7 @@ TARGET = ROOT / "src" / "auditrail" / "_limits.py"
 
 # (section heading, [(group label, minimum number of items)]) -- groups in document order
 SECTIONS = [
-    ("## What v0.2 does NOT do", [("About the evidence", 5), ("About the policy and messages", 4),
+    ("## What it does NOT do", [("About the evidence", 5), ("About the policy and messages", 4),
                                    ("About isolation", 1), ("About scope", 2)]),
     ("## Where the tests do not reach", [(None, 5)]),
 ]
@@ -71,7 +71,7 @@ def render(text: str) -> str:
     items = parse(text)
     sha = hashlib.sha256(normalise(text).encode("utf-8")).hexdigest()
     lines = ['"""Generated from SECURITY.md by tools/gen_limits.py. Do not edit.', "",
-             "The bold lead sentence of every limit in SECURITY.md (\"What v0.2 does NOT do\" and \"Where the tests do not",
+             "The bold lead sentence of every limit in SECURITY.md (\"What it does NOT do\" and \"Where the tests do not",
              'reach"), and the SHA-256 of the SECURITY.md text (line endings normalised to LF) they were taken from."""',
              "", f"SOURCE_SHA256 = {sha!r}", "", "ITEMS = ("]
     for group, lead in items:
