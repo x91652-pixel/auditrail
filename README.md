@@ -484,7 +484,7 @@ The Python test suite (a few tests run only on POSIX and several only on Windows
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](https://github.com/x91652-pixel/auditrail/tree/main/docs/spec/vectors) through the independent verifier) and
-`cd dashboard && cargo test`. Python tests that compare against the Rust verifier are
+`cd dashboard && cargo test` (`dashboard/` is a separate Rust web viewer for the evidence log, integrity verification and policies, version 0.1.0 in its own `Cargo.toml`; it is not part of the PyPI package). Python tests that compare against the Rust verifier are
 skipped until you run `cd verifier && cargo build --locked --release`.
 
 The two verifiers are also fuzzed against each other (`tests/test_fuzz.py`, Hypothesis; raise the sample size with
