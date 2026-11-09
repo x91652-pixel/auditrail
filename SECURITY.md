@@ -188,7 +188,8 @@ covered). The verifier still reads a file that lacks only its final newline as t
   file. Load only policy files you trust.
 - `RecorderService.stop()` waits up to 5 seconds (`inflight_timeout_s`) for requests that are still being written
   before it takes the final heartbeat. A write that is stuck for longer is not waited for: if it is written at all,
-  that record is not counted by any heartbeat, because there is no later one.
+  that record is not counted by any heartbeat, because there is no later one. A request that has arrived but has not
+  yet passed validation (it is counted as in flight only after that) is not waited for either.
 - **The PyPI package has no provenance attestation.** It is built and uploaded by hand by the maintainer
   (`twine`, from a clean build of the release tag; see [docs/RELEASING.md](docs/RELEASING.md)), not by a CI workflow,
   so PyPI holds no attestation tying a file to this repository. To check a download yourself: `pip download
