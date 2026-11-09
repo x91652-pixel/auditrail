@@ -3,7 +3,7 @@
 The bold lead sentence of every limit in SECURITY.md ("What it does NOT do" and "Where the tests do not
 reach"), and the SHA-256 of the SECURITY.md text (line endings normalised to LF) they were taken from."""
 
-SOURCE_SHA256 = '68b2c99d52bd69fda82032df3e3a41958c9d277faceefbc28c94540312349f96'
+SOURCE_SHA256 = '5c67e9fbe1d209642b552385881192a2b6cb9edbd1f82f50bc5dce6a019c3f6b'
 
 ITEMS = (
     ('About the evidence', 'It cannot prove a tool call was recorded if the tool was never wrapped.'),

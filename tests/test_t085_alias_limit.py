@@ -97,3 +97,25 @@ def test_aliases_in_a_small_policy_still_work(tmp_path):
     p.write_text('version: "v1"\nagents:\n  a: &s {allowed_tools: [t], tool_categories: {t: []}}\n  b: *s\n',
                  encoding="utf-8")
     assert set(PolicyEngine.from_yaml(str(p)).agents) == {"a", "b"}
+
+
+def test_t103_b2_few_nodes_with_big_strings_are_refused_by_the_size_limit(tmp_path):
+    """0.3.3 B2: one 4,000-character string referenced 3,000 times is only ~3,000 nodes but 12 million characters
+    once expanded; the node limit alone would accept it (and policy_hash would then expand all of it)."""
+    big = "x" * 4000
+    refs = ", ".join(["*s"] * 3000)
+    p = tmp_path / "heavy.yaml"
+    p.write_text(f'version: "v1"\nbig: &s "{big}"\nlots: [{refs}]\nagents: {{}}\n', encoding="utf-8")
+    assert p.stat().st_size < 30_000
+    t0 = time.monotonic()
+    with pytest.raises(PolicyError, match="characters"):
+        PolicyEngine.from_yaml(str(p))
+    assert time.monotonic() - t0 < 5
+
+
+def test_t103_b2_the_same_policy_just_under_the_size_limit_loads(tmp_path):
+    big = "x" * 4000
+    refs = ", ".join(["*s"] * 200)  # 800,000 characters expanded: under MAX_POLICY_CHARS
+    p = tmp_path / "ok.yaml"
+    p.write_text(f'version: "v1"\nbig: &s "{big}"\nlots: [{refs}]\nagents: {{}}\n', encoding="utf-8")
+    PolicyEngine.from_yaml(str(p))
