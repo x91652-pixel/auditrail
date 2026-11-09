@@ -1,9 +1,9 @@
 """Generated from SECURITY.md by tools/gen_limits.py. Do not edit.
 
-The bold lead sentence of every limit in SECURITY.md ("What v0.2 does NOT do" and "Where the tests do not
+The bold lead sentence of every limit in SECURITY.md ("What it does NOT do" and "Where the tests do not
 reach"), and the SHA-256 of the SECURITY.md text (line endings normalised to LF) they were taken from."""
 
-SOURCE_SHA256 = 'e43225a387bcca0667b8e5e18e9b3285eca5dff8fd398f80404aec6fc012f651'
+SOURCE_SHA256 = 'c634f6b49ec335d1d9e34dc7da95857d443f462eb3cde880ee6b18e73f90db06'
 
 ITEMS = (
     ('About the evidence', 'It cannot prove a tool call was recorded if the tool was never wrapped.'),

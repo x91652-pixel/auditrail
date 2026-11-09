@@ -57,7 +57,7 @@ def test_the_parser_is_strict_about_structure(gen):
     with pytest.raises(gen.LimitsError, match="About scope"):
         gen.parse(text.replace("**About scope**", "**Scope**"))
     with pytest.raises(gen.LimitsError, match="no section"):
-        gen.parse(text.replace("## What v0.2 does NOT do", "## What it does not do"))
+        gen.parse(text.replace("## What it does NOT do", "## What it does not do"))
     with pytest.raises(gen.LimitsError, match="no section"):
         gen.parse(text.replace("## Where the tests do not reach", "## Where tests stop"))
     stripped = "\n".join(line.replace("- **", "- ") for line in text.split("\n") if line.startswith("- **"))

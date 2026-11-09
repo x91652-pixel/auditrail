@@ -324,10 +324,14 @@ A signed message proves who sent it. It does not make its content safe.
 
 ## 10. Conformance
 
-[`vectors/`](vectors/) holds fifteen cases (ledgers, keys, witness copies,
-`expected.json`) covering a valid ledger, edits with and without recomputed
+[`vectors/`](vectors/) holds numbered cases (ledgers, keys, witness copies,
+`expected.json`); the directory is the list. Cases 01-15 cover a valid ledger, edits with and without recomputed
 hashes, truncation, a rebuilt ledger under another key, a heartbeat gap, unrecorded
-calls, a nonsense timestamp, a malformed `policy_hash`, a float, a non-UTF-8 file, and a genuine v0.1 ledger. `vectors/generate.py`
+calls, a nonsense timestamp, a malformed `policy_hash`, a float, a non-UTF-8 file, and a genuine v0.1 ledger. Cases 16-24
+cover the algorithm identifier and format version: a record or anchor whose `sig_alg` differs from the trusted key's,
+an unsupported algorithm, an upper-case or newline-terminated `sig_alg`, an explicit `ed25519`, `format` 3, and anchors
+of `anchor_version` 3. Cases 25-36 pin the order in which findings are reported when an edit is combined with a
+`sig_alg` or `format` 3, with keys, anchors or a witness copy in different combinations (the ordering rule is stated earlier in this document). `vectors/generate.py`
 regenerates them byte-for-byte.
 
 Vectors prove the common cases. For the rest, the reference implementations are also

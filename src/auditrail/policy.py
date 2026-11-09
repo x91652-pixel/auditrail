@@ -147,10 +147,15 @@ class PolicyError(ValueError):
 #: Most nodes a policy file may expand to once YAML aliases are resolved. A real policy is a few hundred;
 #: a "billion laughs" file is a few hundred bytes that expands to millions, so it is refused before it is built.
 MAX_POLICY_NODES = 100_000
+#: Most characters of scalar text a policy may expand to once aliases are resolved (keys and values together). The node
+#: limit alone lets a few nodes holding a large string be multiplied by aliases; a real policy is a few thousand
+#: characters.
+MAX_POLICY_CHARS = 1_000_000
 
 
 def load_policy_yaml(text: str):
-    """Parse policy YAML (safe loader), refusing alias expansion beyond MAX_POLICY_NODES nodes.
+    """Parse policy YAML (safe loader), refusing alias expansion beyond MAX_POLICY_NODES nodes or MAX_POLICY_CHARS
+    characters of scalar text.
 
     The node graph is composed first and its expanded size counted without expanding it, so a file that
     would blow up is refused in linear time and memory, before anything is built or hashed."""
@@ -161,39 +166,45 @@ def load_policy_yaml(text: str):
         root = loader.get_single_node()
         if root is None:
             return None
-        sizes: dict = {}
+        sizes: dict = {}  # id(node) -> (nodes, characters) after expansion, each capped just above its limit
         active: set = set()
 
-        def size(node) -> int:
+        def size(node) -> tuple:
             key = id(node)
             if key in sizes:
                 return sizes[key]
             if key in active:
                 raise PolicyError("policy YAML contains a recursive alias")
             active.add(key)
-            total = 1
+            nodes, chars = 1, 0
             if isinstance(node, yaml.SequenceNode):
-                for child in node.value:
-                    total += size(child)
-                    if total > MAX_POLICY_NODES:
-                        break
+                children = node.value
             elif isinstance(node, yaml.MappingNode):
-                for k, v in node.value:
-                    total += size(k) + size(v)
-                    if total > MAX_POLICY_NODES:
-                        break
+                children = [x for pair in node.value for x in pair]
+            else:
+                children = ()
+                chars = len(node.value) if isinstance(node.value, str) else 0
+            for child in children:
+                n, c = size(child)
+                nodes += n
+                chars += c
+                if nodes > MAX_POLICY_NODES or chars > MAX_POLICY_CHARS:
+                    break
             active.discard(key)
-            total = min(total, MAX_POLICY_NODES + 1)
-            sizes[key] = total
-            return total
+            result = (min(nodes, MAX_POLICY_NODES + 1), min(chars, MAX_POLICY_CHARS + 1))
+            sizes[key] = result
+            return result
 
         try:
-            n = size(root)
+            n_nodes, n_chars = size(root)
         except RecursionError:
             raise PolicyError("policy YAML is nested too deeply") from None
-        if n > MAX_POLICY_NODES:
+        if n_nodes > MAX_POLICY_NODES:
             raise PolicyError(f"policy YAML expands to more than {MAX_POLICY_NODES} nodes once aliases are "
                               "resolved; remove the aliases or shrink the file")
+        if n_chars > MAX_POLICY_CHARS:
+            raise PolicyError(f"policy YAML expands to more than {MAX_POLICY_CHARS} characters of text once aliases "
+                              "are resolved; remove the aliases or shrink the file")
         return loader.construct_document(root)
     except yaml.YAMLError as exc:
         raise PolicyError(f"policy YAML cannot be parsed: {exc}") from exc

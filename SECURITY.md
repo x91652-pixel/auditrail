@@ -3,7 +3,7 @@
 auditrail is an early-stage project (an early v0.3.x release, no independent security review). This
 document exists so nobody -- including us -- overestimates what it does. Each
 claim in the "does" column is covered by at least one test (named in
-[docs/STATUS.md](docs/STATUS.md)), **except for the cases listed under "Where the
+[docs/STATUS.md](docs/STATUS.md), in Chinese), **except for the cases listed under "Where the
 tests do not reach" below**; the gaps we know of are listed in four places: the "does not" section, "Where the tests do not reach", the "what still remains" column of the opt-in hardening table, and "Smaller known issues". It maps features to the OWASP Top 10 for Agentic Applications 2026
 (ASI01-ASI10) and to the "lethal trifecta" framework (Simon Willison).
 
@@ -11,7 +11,7 @@ tests do not reach" below**; the gaps we know of are listed in four places: the 
 the operator cannot quietly rewrite, *if you keep the signing key and a witness
 copy out of the operator's reach* -- and it tells you plainly what it did not check.
 
-## What v0.2 does
+## What it does
 
 | Feature | Maps to | What it proves, and the condition |
 |---|---|---|
@@ -24,7 +24,7 @@ copy out of the operator's reach* -- and it tells you plainly what it did not ch
 | Per-agent Ed25519 messages, receipts, `reconcile` | ASI07 | A message is attributable to one agent (not "anyone with the shared secret"), is bound to its recipient, and both sides' ledgers can be cross-checked for a message only one side recorded. |
 | Process-isolated tools (`isolate=True`) | partial ASI05 | Runs a call in a subprocess with an **allow-listed** environment and a timeout. Reduces accidents and ambient-secret leakage. |
 
-## What v0.2 does NOT do
+## What it does NOT do
 
 Be skeptical of any tool (including this one) that does not say this part out loud.
 
@@ -80,7 +80,8 @@ Stated so that "has a test" is not read as "is verified everywhere":
   not signed or attested, so check what you download yourself with the `sha256sum` and `gh attestation verify`
   steps in the README. That the Windows binary comes out byte-identical on different machines is **not** verified:
   the toolchain and build paths differ, and a reviewer measured different hashes. `verify --git-repo` through the CLI
-  has no test of its own.
+  has no test of its own. The check added in 0.3.3 (the tag must equal the package version and its commit must be on
+  `main`) has not yet run on a real tag.
 - **Tests that need the Rust binary** skip with an explicit reason when it is not built; a green run without it says
   nothing about Python/Rust agreement.
 - **The Windows ACL check** reads only the broad groups (see the recorder row below); a loose permission it cannot see passes. It also does not look at the **parent directory** of the ledger or key, and a grant to one specific other account (as opposed to Everyone/Users/Authenticated Users/Guests/Anonymous) is not flagged. The check **failed outright when pytest was started from PowerShell 7** (the child Windows PowerShell 5.1 inherited PS7's module path and could not load `Get-Acl`); it now uses .NET calls only, drops the inherited `PSModulePath` and starts 5.1 by its system path, and this is verified only by a local simulation and by CI, not by every host setup. A PowerShell run that *succeeds but prints nothing parseable* is now treated as `NOT CHECKED` (the recorder refuses to start without `--allow-loose-permissions`); that case used to pass silently. A line that mentions a broad group (its SID or name) but is not a well-formed entry (non-numeric or hex rights, a missing or extra column, spaces around the `|`, lower-case `allow`, garbage around the SID) also makes the file `NOT CHECKED`, however many good lines are next to it. **Lines that mention no broad group and are malformed are ignored**: they cannot be told apart from noise, and the check does not claim to have read them.
@@ -88,7 +89,6 @@ Stated so that "has a test" is not read as "is verified everywhere":
 - **Cross-section label consistency is enforced when a tool is wrapped** (`Guard.guarded_tool`). Calling `PolicyEngine.check` directly, without a Guard, does not compare sections, and an inconsistent policy still *loads*. (Pinned by `tests/test_t015_known_limits.py`.)
 - **Duplicate YAML keys are not reported**: PyYAML keeps the last one, so a second `tool_categories:` (or `allowed_tools:`) in the same section silently replaces the first. Review policy files like code. (Pinned by `tests/test_t015_known_limits.py`.)
 - **Shutdown paths not exercised**: the recorder's clean shutdown is tested with Ctrl+Break on Windows and, unrun, SIGTERM on POSIX. A console-close event (`CTRL_CLOSE_EVENT`) and a service-manager stop have not been tried; they may skip the final heartbeat and anchor.
-  see passes.
 
 ## Opt-in hardening: what it mitigates and what remains
 
@@ -118,10 +118,12 @@ before. **Four are behavior changes that apply by default** (labels that contrad
 | Recorder connection limits (`RecorderService`) | A request line longer than `max_line_bytes` (default 1 MiB) closes the connection, before the token is looked at and without buffering more than the limit; a connection idle or stalled for `connection_timeout_s` (default 300 s) is closed; more than `max_connections` (default 128) simultaneous connections are refused, except that a connection that has not yet shown the token is dropped to make room (the oldest first); a connection that has not shown a valid token within `preauth_timeout_s` (default 10 s) of connecting is closed, however many bytes it has sent, so the idle-timeout above applies only after the token was shown. A recorder started without a token has no pre-authentication deadline (nobody has to show anything), so enough idle connections can still make a legitimate agent wait or be refused for a while; that mode already lets any local process write. `RemoteLedger` reconnects by itself after an idle close. Before, one line of any size was buffered in memory before the token was checked, and every connection took a thread. | The four values are arguments of `RecorderService(...)`; raise them there. The `auditrail recorder` command uses the defaults. |
 | Appending to a ledger that does not end in a newline (`Ledger`, the recorder) | `LedgerTailError`: nothing is written and the file is not changed. Before, a torn last record made every later append fail, and a missing newline made the next record share a line with the last one. | Restore or move the file and start a new one; see "A ledger that ends in the middle of a line". There is deliberately no switch to append anyway. |
 | `auditrail verify --anchors FILE` with a FILE that does not exist (Python CLI) | One line `[ERROR] FILE: file not found` (or `not a file` for a directory) on stderr and **exit code 2**, no result. Before: `OK`, as if no anchors had been made yet, which hid a mistyped path. A witness copy, or an anchors file that is a regular file but cannot be read (a lock, permissions), is `SINK_UNREACHABLE` (inconclusive, exit 1) instead of an uncaught error; a directory given to `--anchors` is an `[ERROR]` (`not a file`) with exit 2. | Leave out `--anchors` to verify without anchors. The library function `verify_anchors` still treats a missing file as no anchors; only the command line changed. |
-| Policy YAML with aliases (`PolicyEngine.from_yaml`, `auditrail lint`, `recorder --policy`) | A policy that expands to more than 100,000 nodes once aliases are resolved, or that contains a recursive alias, is refused with `PolicyError` before it is built or hashed. Policies below the limit load and hash exactly as before. | Remove the aliases or shrink the file. The limit counts nodes, not bytes: see "Smaller known issues". |
-| `auditrail lint` with a file that cannot be read (Python CLI) | `[ERROR] FILE: cannot be read: ...` and **exit code 2** (printed on standard output). A file that can be read but is not a valid policy, including one that is not valid UTF-8, is still `[INVALID]` and exit code 1. Before, both were exit code 1. | Check the path, or treat 2 like 1 in a script. |
+| Policy YAML with aliases (`PolicyEngine.from_yaml`, `auditrail lint`, `recorder --policy`) | A policy that expands to more than 100,000 nodes or 1,000,000 characters of text once aliases are resolved, or that contains a recursive alias, is refused with `PolicyError` before it is built or hashed. Policies below the limit load and hash exactly as before. | Remove the aliases or shrink the file. See "Smaller known issues" for what was measured. |
+| `auditrail lint` with a file that cannot be read (Python CLI) | `[ERROR] FILE: cannot be read: ...` on standard error and **exit code 2** (in 0.3.2 and earlier the line went to standard output). `lint --help` lists the exit codes. A file that can be read but is not a valid policy, including one that is not valid UTF-8, is still `[INVALID]` and exit code 1. Before, both were exit code 1. | Check the path, or treat 2 like 1 in a script. |
 | `auditrail keygen --out PREFIX` when `PREFIX.pub` already exists | `[REFUSED]` and exit code 1, even when `PREFIX.key` does not exist; nothing is written. Before, the existing public key was overwritten. | Choose another prefix, or move the old `.pub` away yourself. |
 | Errors while parsing policy YAML (`PolicyEngine.from_yaml`) | Always raised as `PolicyError`. Before, a malformed file raised a `yaml.YAMLError` subclass (`ScannerError`, `ComposerError`, `ConstructorError`); library code that catches `yaml.YAMLError` around `from_yaml` no longer catches it. `lint` is unaffected (exit code 1). | Catch `PolicyError` (a `ValueError`). |
+| `RecorderService.stop()` (and so `auditrail recorder` on shutdown) | Waits for requests still being written, up to `inflight_timeout_s` (default 5 seconds), before the final heartbeat, so that heartbeat counts them. Before, such a request was written but never counted. Shutdown can now take up to that long when a write is stuck. | Call `stop(inflight_timeout_s=0)` for the old behavior. |
+| `auditrail recorder --policy FILE` with a policy that cannot be loaded (invalid, missing, unreadable, or refused by the alias limit) | One line `[RECORDER][ERROR] policy FILE: ...` on standard error and **exit code 2**; the recorder does not start and nothing is written (the policy is read before the ledger is opened). Before, it ended with a Python traceback. | Fix the file; `auditrail lint FILE` reports the same problem. |
 
 Not changed: an empty category list is still not a declaration in strict mode, and without strict mode a tool with no
 category still runs (with a warning when it is wrapped).
@@ -177,16 +179,18 @@ covered). The verifier still reads a file that lacks only its final newline as t
 - The categories in an agent-to-agent message are declared (and signed) by the sender. A sender that leaves out a
   category it touched gives the receiver no way to inherit it: "a split trifecta is still a trifecta" holds only when
   senders declare honestly.
-- `auditrail recorder --policy FILE` with a policy that cannot be loaded (invalid, or refused by the alias limit)
-  ends with a Python traceback from `PolicyError` instead of a one-line message and a defined exit code. It does not
-  start; `auditrail lint` is the command that reports such a file cleanly (exit 1).
 - Publishing an anchor with `--git-repo` runs `git add` and `git commit` in the witness repository, so that
   repository's own hooks are executed by git. Use `--git-repo` only with a repository you trust.
-- The policy alias limit counts nodes (100,000 after aliases are resolved), not bytes. A few nodes holding a large
-  string can still be multiplied by aliases: a 0.30 MB file that expands to about 387 MB was accepted in 4.7 seconds
-  (measured by the reviewer). Load only policy files you trust. A limit on the expanded length is a follow-up.
-- If `RecorderService.stop()` takes its final heartbeat while a request is still being written, that request is
-  written to the ledger but is not counted by any heartbeat, because there is no later one.
+- The policy alias limit is two limits on what the file expands to once aliases are resolved: 100,000 nodes and
+  1,000,000 characters of text (keys and values together). Before 0.3.3 only nodes were counted, and a 0.30 MB file
+  that expanded to about 387 MB was accepted in 4.7 seconds (measured by the reviewer). Measured with the current
+  limits: a 5 KB file holding one 4,000-character string referenced 248 times is accepted (0.014 s); the same shape
+  with 99,000 references (0.4 MB) is refused (1.7 s). These are measurements of that shape, not a proof for every
+  file. Load only policy files you trust.
+- `RecorderService.stop()` waits up to 5 seconds (`inflight_timeout_s`) for requests that are still being written
+  before it takes the final heartbeat. A write that is stuck for longer is not waited for: if it is written at all,
+  that record is not counted by any heartbeat, because there is no later one. A request that has arrived but has not
+  yet passed validation (it is counted as in flight only after that) is not waited for either.
 - **The PyPI package has no provenance attestation.** It is built and uploaded by hand by the maintainer
   (`twine`, from a clean build of the release tag; see [docs/RELEASING.md](docs/RELEASING.md)), not by a CI workflow,
   so PyPI holds no attestation tying a file to this repository. To check a download yourself: `pip download

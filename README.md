@@ -27,7 +27,7 @@ links below point there. To work from a source checkout, see the [Quickstart](ht
 > **Status and what this is not.** Early (v0.3), with no independent security review. The evidence
 > format is a draft. Both verifiers (Python and Rust) were written by the same author, so they check that the two
 > agree, not yet that the format is right. It is not a certified compliance product. What it deliberately does not
-> do is listed in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md); read that before deciding whether it fits.
+> do is listed in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md). Read that before deciding whether it fits.
 
 [![test](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml/badge.svg)](https://github.com/x91652-pixel/auditrail/actions/workflows/test.yml)
 ![status](https://img.shields.io/badge/status-v0.3_early-orange)
@@ -105,7 +105,7 @@ already use.
 - **Heartbeats.** The recorder periodically writes which tools it wraps, a hash of
   the policy in force, and how many calls it intercepted vs. recorded, so silent
   periods, tool/policy changes, and calls that ran without evidence show up while the writer is alive (a process that
-  dies inside a tool leaves no record and no count; a heartbeat written on a client's request carries `origin: "client"`, the recorder's own does not; see [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md)).
+  dies inside a tool leaves no record and no count; a heartbeat written on a client's request carries `origin: "client"`, the recorder's own does not). See [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md).
 - **Independent implementation of the verifier.** `verifier/` is a separate Rust program, written from the
   [public format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md) and tested against the same
   conformance vectors as the Python code. One offline binary, no network. It was written by the
@@ -154,7 +154,7 @@ replay = SqliteReplayGuard("replay.sqlite")   # one replay decision shared by ev
   check.
 - **Behavior change:** the same tool labelled differently by two agent sections raises `PolicyError` when it is
   wrapped; give it one label set.
-- **Behavior change (verifiers, Python and Rust):** two new statuses, `UNSUPPORTED_ALGORITHM` (inconclusive, exit 1: the trusted key is registered as an algorithm the verifier cannot check; a `.pub` file cannot express that, so file input gets `BAD_SIGNATURE` "algorithm mismatch" for any record that names an algorithm other than its Ed25519 key's) and `UNSUPPORTED_FORMAT` (`format` is an integer other than 2). An optional `sig_alg` member names the algorithm; absent means Ed25519 and Ed25519 is always written by omission, so existing ledgers are unchanged. An explicit `"sig_alg":"ed25519"` is rejected. See [the format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md).
+- **Behavior change (verifiers, Python and Rust):** two new statuses, `UNSUPPORTED_ALGORITHM` (inconclusive, exit 1: the trusted key is registered as an algorithm the verifier cannot check; a `.pub` file cannot express that, so file input gets `BAD_SIGNATURE` "algorithm mismatch" for any record that names an algorithm other than its Ed25519 key's) and `UNSUPPORTED_FORMAT` (`format` is an integer other than 2). The Rust verifier can only report `UNSUPPORTED_FORMAT`: `UNSUPPORTED_ALGORITHM` needs a trusted key registered with an explicit algorithm type, which only the Python API can express. An optional `sig_alg` member names the algorithm; absent means Ed25519 and Ed25519 is always written by omission, so existing ledgers are unchanged. An explicit `"sig_alg":"ed25519"` is rejected. See [the format spec](https://github.com/x91652-pixel/auditrail/blob/main/docs/spec/evidence-format-v2.md).
 
 These make a *missing* label and an *unordered* write visible and refusable. They cannot tell that a label is wrong;
 see "Opt-in hardening" in [SECURITY.md](https://github.com/x91652-pixel/auditrail/blob/main/SECURITY.md) for what each one does not cover.
@@ -331,7 +331,7 @@ A report is easy to over-read. The numbered points below are what it does not sa
 
 ## Quickstart
 
-Python 3.10 or newer is required (CI tests 3.10 and 3.12). Work in a virtual environment (a folder of
+Python 3.10 or newer is required (CI tests 3.10 through 3.13). Work in a virtual environment (a folder of
 Python packages kept just for this project): on recent Debian-based distributions (we saw it on
 Ubuntu 26.04) pip can refuse a system-wide install with "externally-managed-environment"
 ([PEP 668](https://peps.python.org/pep-0668/)); this is from our own test run, not a statement about every Ubuntu version.
@@ -480,11 +480,11 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-All 998 Python tests (a few run only on POSIX and several only on Windows, the others everywhere) are deterministic and require no network access or API key
+The Python test suite (a few tests run only on POSIX and several only on Windows, the others everywhere) is deterministic and requires no network access or API key
 (one demo scenario attempts a single real HTTP call and skips gracefully
 if you're offline). The Rust parts have their own tests: `cd verifier && cargo test`
 (runs every [conformance vector](https://github.com/x91652-pixel/auditrail/tree/main/docs/spec/vectors) through the independent verifier) and
-`cd dashboard && cargo test`. Python tests that compare against the Rust verifier are
+`cd dashboard && cargo test` (`dashboard/` is a separate Rust web viewer for the evidence log, integrity verification and policies, version 0.1.0 in its own `Cargo.toml`; it is not part of the PyPI package). Python tests that compare against the Rust verifier are
 skipped until you run `cd verifier && cargo build --locked --release`.
 
 The two verifiers are also fuzzed against each other (`tests/test_fuzz.py`, Hypothesis; raise the sample size with
@@ -500,7 +500,7 @@ python -m examples.logistics_sim.run
 ```
 
 Results and the reasoning behind each scenario are in
-[docs/simulation.md](https://github.com/x91652-pixel/auditrail/blob/main/docs/simulation.md).
+[docs/simulation.md](https://github.com/x91652-pixel/auditrail/blob/main/docs/simulation.md) (written in Chinese).
 
 ## Contributing
 
