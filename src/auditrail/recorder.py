@@ -316,11 +316,21 @@ class RecorderService:
             threading.Thread(target=self._loop, args=(self.anchor_s, self.anchor), daemon=True).start()
         return self
 
-    def stop(self) -> None:
-        """Final heartbeat and anchor, then shut down."""
+    def stop(self, inflight_timeout_s: float = 5.0) -> None:
+        """Final heartbeat and anchor, then shut down.
+
+        Requests that are still being written when the server stops are waited for (at most inflight_timeout_s
+        seconds), so the final heartbeat counts them. A write that is stuck longer than that is not waited for: its
+        record, if it is written at all, is not counted by any heartbeat."""
         self._stop.set()
         self._server.shutdown()
         self._server.server_close()
+        deadline = time.monotonic() + max(0.0, inflight_timeout_s)
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._inflight <= 0:
+                    break
+            time.sleep(0.01)
         self.heartbeat()
         self.anchor()
 
@@ -460,12 +470,17 @@ def serve(args) -> int:
         print(f"[RECORDER][WARN] loose permissions accepted (--allow-loose-permissions): {f.message}", flush=True)
     for f in unchecked:
         print(f"[RECORDER][WARN] NOT CHECKED (accepted with --allow-loose-permissions): {f.message}", flush=True)
-    signer = Signer.from_file(args.key)
-    ledger = Ledger(args.ledger, signer=signer)
     policy_version, policy_hash = "", None  # no policy file: heartbeats say "unknown" rather than inventing a hash
     if args.policy:
-        engine = PolicyEngine.from_yaml(args.policy)
+        # Loaded before the ledger is opened, so a policy that cannot be used leaves nothing behind.
+        try:
+            engine = PolicyEngine.from_yaml(args.policy)
+        except (ValueError, OSError, RuntimeError) as exc:  # PolicyError is a ValueError
+            print(f"[RECORDER][ERROR] policy {args.policy}: {' '.join(str(exc).split())}", file=sys.stderr, flush=True)
+            return 2
         policy_version, policy_hash = engine.version, engine.policy_hash
+    signer = Signer.from_file(args.key)
+    ledger = Ledger(args.ledger, signer=signer)
     sink = None
     if args.git_repo:
         sink = GitSink(args.git_repo)

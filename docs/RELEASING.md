@@ -5,6 +5,9 @@ How a release of auditrail is built and uploaded. For how to *check* a published
 
 ## 1. Before building
 
+- `release.yml` refuses to publish a GitHub Release unless the tag equals `v` plus the version in `pyproject.toml` and the
+  tagged commit is on `main`; otherwise the publish job stops before anything is attested or released. Bump the
+  version and merge to `main` before tagging.
 - The release commit is on `main`, tests are green on CI, and the version is the same in `pyproject.toml`,
   `auditrail.__version__`, `verifier/Cargo.toml` and `verifier/Cargo.lock`.
 - The tag `vX.Y.Z` points at that commit. The GitHub Release workflow (`release.yml`) builds the Rust binaries

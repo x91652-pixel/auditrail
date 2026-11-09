@@ -58,7 +58,8 @@ def test_lint_invalid(tmp_path, capsys):
 
 def test_t085_lint_unreadable_file_exits_2_and_invalid_policy_exits_1(tmp_path, capsys):
     assert main(["lint", str(tmp_path / "missing.yaml")]) == 2
-    assert "[ERROR]" in capsys.readouterr().out
+    cap = capsys.readouterr()
+    assert "[ERROR]" in cap.err and "[ERROR]" not in cap.out  # since 0.3.3 on standard error, like verify/report
     assert main(["lint", str(tmp_path)]) == 2  # a directory cannot be read either
     bad = tmp_path / "bad.yaml"
     bad.write_text("agents: {}\n", encoding="utf-8")
@@ -73,3 +74,14 @@ def test_t085_keygen_refuses_to_overwrite_an_existing_pub_even_without_a_key(tmp
     assert "[REFUSED]" in capsys.readouterr().out
     assert pub.read_text(encoding="utf-8") == "keep me\n"
     assert not (tmp_path / "k.key").exists(), "no private key may be left behind by a refused keygen"
+
+
+def test_t103_lint_help_documents_the_exit_codes(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit) as exc:
+        main(["lint", "--help"])
+    assert exc.value.code == 0
+    out = " ".join(capsys.readouterr().out.split())
+    for needle in ("0", "1", "2", "[INVALID]", "[ERROR]", "standard error"):
+        assert needle in out, (needle, out)
