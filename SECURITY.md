@@ -121,6 +121,7 @@ before. **Four are behavior changes that apply by default** (labels that contrad
 | `auditrail lint` with a file that cannot be read (Python CLI) | `[ERROR] FILE: cannot be read: ...` and **exit code 2** (printed on standard output). A file that can be read but is not a valid policy, including one that is not valid UTF-8, is still `[INVALID]` and exit code 1. Before, both were exit code 1. | Check the path, or treat 2 like 1 in a script. |
 | `auditrail keygen --out PREFIX` when `PREFIX.pub` already exists | `[REFUSED]` and exit code 1, even when `PREFIX.key` does not exist; nothing is written. Before, the existing public key was overwritten. | Choose another prefix, or move the old `.pub` away yourself. |
 | Errors while parsing policy YAML (`PolicyEngine.from_yaml`) | Always raised as `PolicyError`. Before, a malformed file raised a `yaml.YAMLError` subclass (`ScannerError`, `ComposerError`, `ConstructorError`); library code that catches `yaml.YAMLError` around `from_yaml` no longer catches it. `lint` is unaffected (exit code 1). | Catch `PolicyError` (a `ValueError`). |
+| `auditrail recorder --policy FILE` with a policy that cannot be loaded (invalid, missing, unreadable, or refused by the alias limit) | One line `[RECORDER][ERROR] policy FILE: ...` on standard error and **exit code 2**; the recorder does not start and nothing is written (the policy is read before the ledger is opened). Before, it ended with a Python traceback. | Fix the file; `auditrail lint FILE` reports the same problem. |
 
 Not changed: an empty category list is still not a declaration in strict mode, and without strict mode a tool with no
 category still runs (with a warning when it is wrapped).
@@ -176,9 +177,6 @@ covered). The verifier still reads a file that lacks only its final newline as t
 - The categories in an agent-to-agent message are declared (and signed) by the sender. A sender that leaves out a
   category it touched gives the receiver no way to inherit it: "a split trifecta is still a trifecta" holds only when
   senders declare honestly.
-- `auditrail recorder --policy FILE` with a policy that cannot be loaded (invalid, or refused by the alias limit)
-  ends with a Python traceback from `PolicyError` instead of a one-line message and a defined exit code. It does not
-  start; `auditrail lint` is the command that reports such a file cleanly (exit 1).
 - Publishing an anchor with `--git-repo` runs `git add` and `git commit` in the witness repository, so that
   repository's own hooks are executed by git. Use `--git-repo` only with a repository you trust.
 - The policy alias limit counts nodes (100,000 after aliases are resolved), not bytes. A few nodes holding a large

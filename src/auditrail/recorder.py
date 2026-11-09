@@ -460,12 +460,17 @@ def serve(args) -> int:
         print(f"[RECORDER][WARN] loose permissions accepted (--allow-loose-permissions): {f.message}", flush=True)
     for f in unchecked:
         print(f"[RECORDER][WARN] NOT CHECKED (accepted with --allow-loose-permissions): {f.message}", flush=True)
-    signer = Signer.from_file(args.key)
-    ledger = Ledger(args.ledger, signer=signer)
     policy_version, policy_hash = "", None  # no policy file: heartbeats say "unknown" rather than inventing a hash
     if args.policy:
-        engine = PolicyEngine.from_yaml(args.policy)
+        # Loaded before the ledger is opened, so a policy that cannot be used leaves nothing behind.
+        try:
+            engine = PolicyEngine.from_yaml(args.policy)
+        except (ValueError, OSError, RuntimeError) as exc:  # PolicyError is a ValueError
+            print(f"[RECORDER][ERROR] policy {args.policy}: {' '.join(str(exc).split())}", file=sys.stderr, flush=True)
+            return 2
         policy_version, policy_hash = engine.version, engine.policy_hash
+    signer = Signer.from_file(args.key)
+    ledger = Ledger(args.ledger, signer=signer)
     sink = None
     if args.git_repo:
         sink = GitSink(args.git_repo)

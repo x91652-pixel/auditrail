@@ -61,8 +61,7 @@ def test_recorder_policy_refuses_the_bomb_before_starting(tmp_path, monkeypatch)
         key=str(key), ledger=str(tmp_path / "l.jsonl"), port=0, policy=str(p), heartbeat=0, anchors=None,
         anchor_every=None, witness_file=None, git_repo=None, token_env="T085_TOKEN", allow_loose_permissions=True)
     t0 = time.monotonic()
-    with pytest.raises(PolicyError):
-        recorder.serve(ns)
+    assert recorder.serve(ns) == 2  # since 0.3.3: one line on stderr and exit 2 (was: a PolicyError traceback)
     assert time.monotonic() - t0 < 5
 
 
