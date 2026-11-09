@@ -121,6 +121,7 @@ before. **Four are behavior changes that apply by default** (labels that contrad
 | `auditrail lint` with a file that cannot be read (Python CLI) | `[ERROR] FILE: cannot be read: ...` and **exit code 2** (printed on standard output). A file that can be read but is not a valid policy, including one that is not valid UTF-8, is still `[INVALID]` and exit code 1. Before, both were exit code 1. | Check the path, or treat 2 like 1 in a script. |
 | `auditrail keygen --out PREFIX` when `PREFIX.pub` already exists | `[REFUSED]` and exit code 1, even when `PREFIX.key` does not exist; nothing is written. Before, the existing public key was overwritten. | Choose another prefix, or move the old `.pub` away yourself. |
 | Errors while parsing policy YAML (`PolicyEngine.from_yaml`) | Always raised as `PolicyError`. Before, a malformed file raised a `yaml.YAMLError` subclass (`ScannerError`, `ComposerError`, `ConstructorError`); library code that catches `yaml.YAMLError` around `from_yaml` no longer catches it. `lint` is unaffected (exit code 1). | Catch `PolicyError` (a `ValueError`). |
+| `RecorderService.stop()` (and so `auditrail recorder` on shutdown) | Waits for requests still being written, up to `inflight_timeout_s` (default 5 seconds), before the final heartbeat, so that heartbeat counts them. Before, such a request was written but never counted. Shutdown can now take up to that long when a write is stuck. | Call `stop(inflight_timeout_s=0)` for the old behavior. |
 | `auditrail recorder --policy FILE` with a policy that cannot be loaded (invalid, missing, unreadable, or refused by the alias limit) | One line `[RECORDER][ERROR] policy FILE: ...` on standard error and **exit code 2**; the recorder does not start and nothing is written (the policy is read before the ledger is opened). Before, it ended with a Python traceback. | Fix the file; `auditrail lint FILE` reports the same problem. |
 
 Not changed: an empty category list is still not a declaration in strict mode, and without strict mode a tool with no
@@ -185,8 +186,9 @@ covered). The verifier still reads a file that lacks only its final newline as t
   limits: a 5 KB file holding one 4,000-character string referenced 248 times is accepted (0.014 s); the same shape
   with 99,000 references (0.4 MB) is refused (1.7 s). These are measurements of that shape, not a proof for every
   file. Load only policy files you trust.
-- If `RecorderService.stop()` takes its final heartbeat while a request is still being written, that request is
-  written to the ledger but is not counted by any heartbeat, because there is no later one.
+- `RecorderService.stop()` waits up to 5 seconds (`inflight_timeout_s`) for requests that are still being written
+  before it takes the final heartbeat. A write that is stuck for longer is not waited for: if it is written at all,
+  that record is not counted by any heartbeat, because there is no later one.
 - **The PyPI package has no provenance attestation.** It is built and uploaded by hand by the maintainer
   (`twine`, from a clean build of the release tag; see [docs/RELEASING.md](docs/RELEASING.md)), not by a CI workflow,
   so PyPI holds no attestation tying a file to this repository. To check a download yourself: `pip download

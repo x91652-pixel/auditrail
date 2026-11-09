@@ -316,11 +316,21 @@ class RecorderService:
             threading.Thread(target=self._loop, args=(self.anchor_s, self.anchor), daemon=True).start()
         return self
 
-    def stop(self) -> None:
-        """Final heartbeat and anchor, then shut down."""
+    def stop(self, inflight_timeout_s: float = 5.0) -> None:
+        """Final heartbeat and anchor, then shut down.
+
+        Requests that are still being written when the server stops are waited for (at most inflight_timeout_s
+        seconds), so the final heartbeat counts them. A write that is stuck longer than that is not waited for: its
+        record, if it is written at all, is not counted by any heartbeat."""
         self._stop.set()
         self._server.shutdown()
         self._server.server_close()
+        deadline = time.monotonic() + max(0.0, inflight_timeout_s)
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._inflight <= 0:
+                    break
+            time.sleep(0.01)
         self.heartbeat()
         self.anchor()
 
