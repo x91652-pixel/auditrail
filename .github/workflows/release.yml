@@ -27,14 +27,15 @@ jobs:
           - { os: macos-latest,   target: x86_64-apple-darwin,       name: macos-x86_64,   exe: auditrail-verify,     native: false, flags: "" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Strip build-machine paths (and, on Windows, the link timestamp) so the same source gives the same bytes.
       # Set here rather than in the matrix because the workspace path is only known on the runner.
       - name: Deterministic build flags
         shell: bash
         run: echo "RUSTFLAGS=${{ matrix.flags }} --remap-path-prefix=$GITHUB_WORKSPACE=." >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       # The binary is only worth shipping if it agrees with the Python implementation on every conformance vector.
       - name: Test against the conformance vectors and fuzz inputs
@@ -73,7 +74,7 @@ jobs:
         run: |
           mkdir -p dist
           cp "verifier/target/${{ matrix.target }}/release/${{ matrix.exe }}" "dist/auditrail-verify-${{ matrix.name }}${{ endsWith(matrix.exe, '.exe') && '.exe' || '' }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: auditrail-verify-${{ matrix.name }}
           path: dist/*
@@ -88,14 +89,14 @@ jobs:
       id-token: write       # build provenance attestation
       attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
         working-directory: dist
         run: sha256sum auditrail-verify-* > SHA256SUMS && cat SHA256SUMS
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: dist/auditrail-verify-*
       - name: Create the release
