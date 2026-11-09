@@ -27,7 +27,7 @@ jobs:
           - { os: macos-latest,   target: x86_64-apple-darwin,       name: macos-x86_64,   exe: auditrail-verify,     native: false, flags: "" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Strip build-machine paths (and, on Windows, the link timestamp) so the same source gives the same bytes.
       # Set here rather than in the matrix because the workspace path is only known on the runner.
       - name: Deterministic build flags
@@ -91,7 +91,7 @@ jobs:
     steps:
       # Nothing is attested or released unless the tag names the version in pyproject.toml and its commit is on main.
       # The tag name goes through the environment, never straight into the script text.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false  # fetch-depth 0 already brought origin/main; later steps use only GH_TOKEN for the gh CLI
