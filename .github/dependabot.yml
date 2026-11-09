@@ -1,0 +1,8 @@
+# Keeps the pinned GitHub Actions current. Only the github-actions ecosystem, monthly, few open PRs at a time.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
