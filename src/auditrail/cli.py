@@ -166,7 +166,7 @@ def cmd_policy_lint(args: argparse.Namespace) -> int:
     try:
         engine = PolicyEngine.from_yaml(args.policy_path)
     except OSError as exc:  # not found, a directory, no permission: the file could not be checked at all
-        print(f"[ERROR] {args.policy_path}: cannot be read: {exc}")
+        print(f"[ERROR] {args.policy_path}: cannot be read: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001
         print(f"[INVALID] {args.policy_path}: {exc}")
@@ -395,7 +395,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--max-rows", type=int, help="Rows shown in long lists (counts are always complete).")
     p_rep.set_defaults(func=cmd_report)
 
-    p_lint = sub.add_parser("lint", help="Validate a policy YAML file.")
+    p_lint = sub.add_parser(
+        "lint", help="Validate a policy YAML file.",
+        description="Validate a policy YAML file.",
+        epilog="Exit codes: 0 the policy is valid ([OK] on standard output); 1 the file was read but the policy is not "
+               "valid ([INVALID] on standard output); 2 the file could not be read ([ERROR] on standard error).")
     p_lint.add_argument("policy_path")
     p_lint.set_defaults(func=cmd_policy_lint)
 
