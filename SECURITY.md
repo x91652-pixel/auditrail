@@ -75,13 +75,16 @@ Stated so that "has a test" is not read as "is verified everywhere":
   no test that rotates a key and verifies across the overlap.
 - **Timestamping services as a witness.** The anchors row lists one as an example of an independent copy; no
   timestamping witness is implemented (RFC 3161 is on the roadmap). Only file and git witnesses exist and are tested.
-- **The release workflow** (`release.yml`) has run successfully on GitHub for v0.3.0, v0.3.1 and v0.3.2. The four
-  prebuilt binaries carry a SLSA build-provenance attestation (GitHub artifact attestation). `SHA256SUMS` itself is
+- **The release workflow** (`release.yml`) has run successfully on GitHub for v0.3.0, v0.3.1, v0.3.2 and v0.3.3. The four
+  prebuilt binaries carry a SLSA build-provenance attestation (GitHub artifact attestation); for the four v0.3.3
+  binaries the attestation was checked with `gh attestation verify --repo` (all passed; signer
+  `release.yml@refs/tags/v0.3.3`, digest of commit 98557d30). `SHA256SUMS` itself is
   not signed or attested, so check what you download yourself with the `sha256sum` and `gh attestation verify`
   steps in the README. That the Windows binary comes out byte-identical on different machines is **not** verified:
   the toolchain and build paths differ, and a reviewer measured different hashes. `verify --git-repo` through the CLI
   has no test of its own. The check added in 0.3.3 (the tag must equal the package version and its commit must be on
-  `main`) has not yet run on a real tag.
+  `main`) passed once, on the real v0.3.3 tag. Its failing case (a tag that should be refused) has not been exercised
+  on a real tag, because the repository's tag protection rules do not allow a test tag to be deleted again.
 - **Tests that need the Rust binary** skip with an explicit reason when it is not built; a green run without it says
   nothing about Python/Rust agreement.
 - **The Windows ACL check** reads only the broad groups (see the recorder row below); a loose permission it cannot see passes. It also does not look at the **parent directory** of the ledger or key, and a grant to one specific other account (as opposed to Everyone/Users/Authenticated Users/Guests/Anonymous) is not flagged. The check **failed outright when pytest was started from PowerShell 7** (the child Windows PowerShell 5.1 inherited PS7's module path and could not load `Get-Acl`); it now uses .NET calls only, drops the inherited `PSModulePath` and starts 5.1 by its system path, and this is verified only by a local simulation and by CI, not by every host setup. A PowerShell run that *succeeds but prints nothing parseable* is now treated as `NOT CHECKED` (the recorder refuses to start without `--allow-loose-permissions`); that case used to pass silently. A line that mentions a broad group (its SID or name) but is not a well-formed entry (non-numeric or hex rights, a missing or extra column, spaces around the `|`, lower-case `allow`, garbage around the SID) also makes the file `NOT CHECKED`, however many good lines are next to it. **Lines that mention no broad group and are malformed are ignored**: they cannot be told apart from noise, and the check does not claim to have read them.
