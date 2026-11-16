@@ -20,8 +20,8 @@ public: keep it free of personal data, credentials and internal schedules.
 
 - After editing `SECURITY.md`, run `python tools/gen_limits.py` and commit the regenerated
   `src/auditrail/_limits.py`. `python tools/gen_limits.py --check` must pass.
-- A version bump changes `pyproject.toml`, `auditrail.__version__`, `verifier/Cargo.toml` and
-  `verifier/Cargo.lock` together.
+- A version bump changes `pyproject.toml`, `auditrail.__version__`, `verifier/Cargo.toml`,
+  `verifier/Cargo.lock` and the version line in `docs/STATUS.md` together.
 - Releases follow `docs/RELEASING.md`. Credentials are never written to files, commands or logs.
 
 ## Wording
