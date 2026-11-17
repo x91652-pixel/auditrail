@@ -308,19 +308,19 @@ class RecorderService:
             return anchor_ledger(self.ledger, self.anchors_path, sink=self.sink, signer=self.ledger.signer)
         except EmptyLedgerError:
             return None  # nothing to anchor yet
-        except AnchorError as exc:
-            # A refused anchor (broken ledger, anchors file that fails verification) is not "nothing to do": keep it
-            # where an operator can see it instead of silently stopping the anchoring.
+        except Exception as exc:  # noqa: BLE001
+            # A refused anchor (broken ledger, anchors file that fails verification), an unreachable witness or a
+            # disk error is not "nothing to do": keep it where an operator can see it instead of silently stopping.
             self.anchor_errors += 1
-            self.last_anchor_error = str(exc)
-            print(f"[RECORDER][WARN] anchoring failed: {exc}", file=sys.stderr, flush=True)
+            self.last_anchor_error = f"{type(exc).__name__}: {exc}"
+            print(f"[RECORDER][WARN] anchoring failed: {self.last_anchor_error}", file=sys.stderr, flush=True)
             return None
 
     def _loop(self, interval: int, fn) -> None:
         while not self._stop.wait(interval):
             try:
                 fn()
-            except Exception:  # noqa: BLE001 - a missed beat/anchor shows up as a gap to the verifier
+            except Exception:  # noqa: BLE001 - heartbeat() failures are not reported; anchor() reports its own
                 pass
 
     def start(self) -> "RecorderService":
@@ -519,6 +519,9 @@ def serve(args) -> int:
             ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,
             heartbeat_s=args.heartbeat, anchors_path=args.anchors, sink=sink, anchor_s=anchor_every,
         ).start()
+    except OSError as exc:
+        print(f"[RECORDER][ERROR] cannot start on port {args.port}: {exc}", file=sys.stderr, flush=True)
+        return 2
     except LedgerTailError as exc:
         # the first heartbeat is the first write, so a ledger that ends in the middle of a line is found here
         print("[ERROR] " + " ".join(str(exc).split()), file=sys.stderr, flush=True)
