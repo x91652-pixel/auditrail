@@ -126,6 +126,16 @@ def _call_isolated(fn: Callable, args: tuple, kwargs: dict, timeout: float, env_
     return outcome["result"]
 
 
+
+def _clip(text: str, limit: int) -> str:
+    """`text` as something the ledger can always store: lone surrogates escaped, cut to `limit` characters (the
+    cut is said in the text). Used for fields that an unauthenticated sender controls."""
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
+    if len(text) > limit:
+        text = text[:limit] + f"...[{len(text) - limit} more characters cut]"
+    return text
+
+
 class Guard:
     """Binds a PolicyEngine + Ledger together so tools can be decorated.
 
@@ -267,10 +277,11 @@ class Guard:
         try:
             d = receive_envelope(envelope, registry, agent_id, replay_guard, max_age_seconds)
         except SignatureError as exc:
+            # Everything below came from an unauthenticated sender: shorten it and make it encodable.
             self.ledger.record_event(
-                "a2a_recv", agent_id=agent_id, status="rejected", reason=str(exc),
-                peer=str(envelope.get("sender")) if isinstance(envelope, dict) else None,
-                msg_id=str(envelope.get("msg_id")) if isinstance(envelope, dict) else None,
+                "a2a_recv", agent_id=agent_id, status="rejected", reason=_clip(str(exc), 512),
+                peer=_clip(str(envelope.get("sender")), 128) if isinstance(envelope, dict) else None,
+                msg_id=_clip(str(envelope.get("msg_id")), 128) if isinstance(envelope, dict) else None,
             )
             raise
         session = self.session(agent_id, trace_id=d.trace_id, inherited=d.categories)
