@@ -194,7 +194,14 @@ class RecorderService:
 
         class Server(socketserver.ThreadingTCPServer):
             daemon_threads = True
-            allow_reuse_address = True
+            # POSIX: SO_REUSEADDR only lets a restart skip TIME_WAIT. Windows: it would let another program bind the
+            # same listening port and take the connections, so there the port is taken exclusively instead.
+            allow_reuse_address = os.name != "nt"
+
+            def server_bind(self) -> None:
+                if os.name == "nt":
+                    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                super().server_bind()
 
             def verify_request(self, request, client_address) -> bool:
                 with service._lock:
