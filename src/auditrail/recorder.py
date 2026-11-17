@@ -128,6 +128,8 @@ class RecorderService:
         self._connections = 0
         self._received = 0
         self._written = 0
+        self.anchor_errors = 0  # anchors refused since start (not counting an empty ledger)
+        self.last_anchor_error: Optional[str] = None
         self._inflight = 0  # counted in _received, outcome (written or refused) not yet known
         self._tools: set[str] = set()
         self._stop = threading.Event()
@@ -293,12 +295,19 @@ class RecorderService:
     def anchor(self) -> Optional[dict]:
         if not self.anchors_path:
             return None
-        from .anchor import AnchorError, anchor_ledger
+        from .anchor import AnchorError, EmptyLedgerError, anchor_ledger
 
         try:
             return anchor_ledger(self.ledger, self.anchors_path, sink=self.sink, signer=self.ledger.signer)
-        except AnchorError:
-            return None  # empty ledger; nothing to anchor yet
+        except EmptyLedgerError:
+            return None  # nothing to anchor yet
+        except AnchorError as exc:
+            # A refused anchor (broken ledger, anchors file that fails verification) is not "nothing to do": keep it
+            # where an operator can see it instead of silently stopping the anchoring.
+            self.anchor_errors += 1
+            self.last_anchor_error = str(exc)
+            print(f"[RECORDER][WARN] anchoring failed: {exc}", file=sys.stderr, flush=True)
+            return None
 
     def _loop(self, interval: int, fn) -> None:
         while not self._stop.wait(interval):
