@@ -229,8 +229,10 @@ the line malformed, reported as `TAMPERED_ANCHOR` ("malformed anchor line"), not
    outranks a later record's `TAMPERED_LEDGER`.
 3. **The owner's anchors file**: line checks (`TAMPERED_ANCHOR`, `UNSIGNED_ANCHOR`, `UNKNOWN_KEY`,
    `BAD_SIGNATURE`; a line whose algorithm is not implemented is remembered and the line is still compared with
-   the ledger), then `TRUNCATED` / `REWRITTEN`, then the witness sinks (`SINK_MISMATCH`; a sink that cannot be reached, `SINK_UNREACHABLE`, is *remembered* like an
-   unsupported algorithm, because the `sink_ref` that names it is neither hashed nor signed and anyone can edit it).
+   the ledger), then `TRUNCATED` / `REWRITTEN`, then the witness sinks, anchor by anchor (`SINK_MISMATCH`; a sink that cannot be reached, `SINK_UNREACHABLE`, is *remembered* like an
+   unsupported algorithm, because the `sink_ref` that names it is neither hashed nor signed and anyone can edit it). The Python
+   implementation stops this per-anchor walk at the first anchor whose sink cannot be reached, so a later
+   `SINK_MISMATCH` is not reported in that case (a known residual, see SECURITY.md).
 4. **The witness copy**: the same, line by line.
 5. **Heartbeats** (if a maximum gap was given): `NO_HEARTBEAT`, `UNRECORDED_CALLS`, `HEARTBEAT_GAP`.
 6. Only now, if nothing definite was found: the **remembered** `UNSUPPORTED_*` or `SINK_UNREACHABLE` (the earliest one
