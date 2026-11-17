@@ -400,7 +400,7 @@ class Ledger:
         problem = check_chain(self.path, public_keys=public_keys)
         if problem is None:
             return True, None
-        return False, problem["bad_seq"]
+        return False, problem.get("bad_seq")
 
     def new_session_id(self) -> str:
         return uuid.uuid4().hex[:12]
