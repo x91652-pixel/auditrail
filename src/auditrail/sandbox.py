@@ -94,6 +94,23 @@ def _isolated_env(passthrough: Iterable[str]) -> dict:
     return env
 
 
+def _kill_tree(popen: "subprocess.Popen") -> None:
+    """End the worker and everything it started (best effort)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(popen.pid)], capture_output=True, timeout=10)
+        else:
+            import signal
+
+            os.killpg(popen.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        popen.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _call_isolated(fn: Callable, args: tuple, kwargs: dict, timeout: float, env_passthrough: Iterable[str] = ()) -> Any:
     job = {"module": fn.__module__, "qualname": fn.__name__, "args": list(args), "kwargs": kwargs}
     if fn.__module__ == "__main__":
@@ -106,14 +123,27 @@ def _call_isolated(fn: Callable, args: tuple, kwargs: dict, timeout: float, env_
             f"'{fn.__name__}': {exc}"
         ) from exc
 
+    # The worker gets its own process group (POSIX session / Windows process group) so that on a timeout the whole tree
+    # can be ended: a tool that leaves a child holding the output pipes would otherwise keep communicate() waiting.
+    group = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    popen = subprocess.Popen(
+        [_sys.executable, "-m", "auditrail._isolate_worker"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        env=_isolated_env(env_passthrough), **group,
+    )
     try:
-        proc = subprocess.run(
-            [_sys.executable, "-m", "auditrail._isolate_worker"],
-            input=payload, capture_output=True, text=True, encoding="utf-8", timeout=timeout,
-            env=_isolated_env(env_passthrough),
-        )
+        stdout, stderr = popen.communicate(input=payload, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        _kill_tree(popen)
+        try:
+            popen.communicate(timeout=5)
+        except Exception:  # noqa: BLE001 - the tree is already being ended; do not let cleanup hide the timeout
+            pass
         raise TimeoutError(f"sandboxed call to {fn.__name__!r} exceeded {timeout}s") from exc
+    except BaseException:
+        _kill_tree(popen)
+        raise
+    proc = subprocess.CompletedProcess(popen.args, popen.returncode, stdout, stderr)
 
     # split on "\n" only: str.splitlines() would also split inside tool output on \x1c-\x1e etc.
     marked = [ln.rstrip("\r")[len(RESULT_MARKER):] for ln in (proc.stdout or "").split("\n") if ln.startswith(RESULT_MARKER)]
