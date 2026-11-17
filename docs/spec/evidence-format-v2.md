@@ -229,11 +229,12 @@ the line malformed, reported as `TAMPERED_ANCHOR` ("malformed anchor line"), not
    outranks a later record's `TAMPERED_LEDGER`.
 3. **The owner's anchors file**: line checks (`TAMPERED_ANCHOR`, `UNSIGNED_ANCHOR`, `UNKNOWN_KEY`,
    `BAD_SIGNATURE`; a line whose algorithm is not implemented is remembered and the line is still compared with
-   the ledger), then `TRUNCATED` / `REWRITTEN`, then the witness sinks (`SINK_UNREACHABLE`, `SINK_MISMATCH`).
+   the ledger), then `TRUNCATED` / `REWRITTEN`, then the witness sinks (`SINK_MISMATCH`; a sink that cannot be reached, `SINK_UNREACHABLE`, is *remembered* like an
+   unsupported algorithm, because the `sink_ref` that names it is neither hashed nor signed and anyone can edit it).
 4. **The witness copy**: the same, line by line.
 5. **Heartbeats** (if a maximum gap was given): `NO_HEARTBEAT`, `UNRECORDED_CALLS`, `HEARTBEAT_GAP`.
-6. Only now, if nothing definite was found: the **remembered** `UNSUPPORTED_*` (the earliest one in the order
-   above), with `anchored_upto` / `unanchored_tail` of what *was* covered; otherwise `OK`.
+6. Only now, if nothing definite was found: the **remembered** `UNSUPPORTED_*` or `SINK_UNREACHABLE` (the earliest one
+   in the order above), with `anchored_upto` / `unanchored_tail` of what *was* covered; otherwise `OK`.
 
 Conformance vectors 25-36 pin this order and the mismatch rule (an edit plus a `sig_alg` or `format: 3` is
 reported by the signature or the witness; an edit in the unanchored tail with every following record given a
