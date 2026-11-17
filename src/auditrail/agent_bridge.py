@@ -268,6 +268,8 @@ def receive_envelope(
         raise SignatureError("malformed envelope (unexpected fields)")
 
     sender = envelope["sender"]
+    if not isinstance(sender, str):  # before it is used as a dictionary key: a list would raise TypeError
+        raise SignatureError("malformed envelope (sender is not a string)")
     pub = registry.public_key(sender)
     if pub is None:
         raise SignatureError(f"unknown sender '{sender}' -- no public key registered")

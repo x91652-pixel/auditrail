@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 from . import _strict
 from ._strict import is_int
 from .keys import DEFAULT_ALG, TAG_ANCHOR, Signer, key_algorithm, supported_algorithms, verify_with
-from .ledger import GENESIS_HASH, Ledger, _canonical, _utc_ts
+from .ledger import GENESIS_HASH, Ledger, _canonical, _file_lock, _utc_ts
 
 ANCHOR_VERSION = 1  # unsigned
 SIGNED_ANCHOR_VERSION = 2
@@ -37,6 +37,10 @@ class AnchorError(Exception):
     def __init__(self, message: str, bad_seq: Optional[int] = None):
         super().__init__(message)
         self.bad_seq = bad_seq
+
+
+class EmptyLedgerError(AnchorError):
+    """The ledger holds no records yet, so there is nothing to anchor (not a failure)."""
 
 
 class SinkUnreachable(Exception):
@@ -64,7 +68,7 @@ def build_anchor(
     """
     records = list(ledger)
     if not records:
-        raise AnchorError("ledger is empty; refusing to anchor (protocol §4.1)")
+        raise EmptyLedgerError("ledger is empty; refusing to anchor (protocol §4.1)")
     ok, bad_seq = ledger.verify()
     if not ok:
         raise AnchorError(
@@ -203,6 +207,14 @@ def anchor_ledger(
     succeeds, so a local anchor never claims an external witness it does not have.
     """
     anchors_path = Path(anchors_path)
+    # One writer at a time per anchors file: read the chain, publish, append. Without this, two writers (the recorder's
+    # timer, stop(), a manual `auditrail anchor`) read the same last anchor and both append, which breaks the chain.
+    # The lock is held while the sink publishes.
+    with _file_lock(anchors_path.with_name(anchors_path.name + ".lock")):
+        return _anchor_locked(ledger, anchors_path, sink, push, signer, clock)
+
+
+def _anchor_locked(ledger, anchors_path, sink, push, signer, clock) -> dict:
     existing, problem = _parse_anchors(anchors_path)
     if problem is not None:
         raise AnchorError(f"anchors file fails verification ({problem['detail']} at line {problem['line']}); refusing to append")

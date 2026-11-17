@@ -128,6 +128,8 @@ class RecorderService:
         self._connections = 0
         self._received = 0
         self._written = 0
+        self.anchor_errors = 0  # anchors refused since start (not counting an empty ledger)
+        self.last_anchor_error: Optional[str] = None
         self._inflight = 0  # counted in _received, outcome (written or refused) not yet known
         self._tools: set[str] = set()
         self._stop = threading.Event()
@@ -192,7 +194,14 @@ class RecorderService:
 
         class Server(socketserver.ThreadingTCPServer):
             daemon_threads = True
-            allow_reuse_address = True
+            # POSIX: SO_REUSEADDR only lets a restart skip TIME_WAIT. Windows: it would let another program bind the
+            # same listening port and take the connections, so there the port is taken exclusively instead.
+            allow_reuse_address = os.name != "nt"
+
+            def server_bind(self) -> None:
+                if os.name == "nt":
+                    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                super().server_bind()
 
             def verify_request(self, request, client_address) -> bool:
                 with service._lock:
@@ -293,18 +302,25 @@ class RecorderService:
     def anchor(self) -> Optional[dict]:
         if not self.anchors_path:
             return None
-        from .anchor import AnchorError, anchor_ledger
+        from .anchor import AnchorError, EmptyLedgerError, anchor_ledger
 
         try:
             return anchor_ledger(self.ledger, self.anchors_path, sink=self.sink, signer=self.ledger.signer)
-        except AnchorError:
-            return None  # empty ledger; nothing to anchor yet
+        except EmptyLedgerError:
+            return None  # nothing to anchor yet
+        except Exception as exc:  # noqa: BLE001
+            # A refused anchor (broken ledger, anchors file that fails verification), an unreachable witness or a
+            # disk error is not "nothing to do": keep it where an operator can see it instead of silently stopping.
+            self.anchor_errors += 1
+            self.last_anchor_error = f"{type(exc).__name__}: {exc}"
+            print(f"[RECORDER][WARN] anchoring failed: {self.last_anchor_error}", file=sys.stderr, flush=True)
+            return None
 
     def _loop(self, interval: int, fn) -> None:
         while not self._stop.wait(interval):
             try:
                 fn()
-            except Exception:  # noqa: BLE001 - a missed beat/anchor shows up as a gap to the verifier
+            except Exception:  # noqa: BLE001 - heartbeat() failures are not reported; anchor() reports its own
                 pass
 
     def start(self) -> "RecorderService":
@@ -479,7 +495,11 @@ def serve(args) -> int:
             print(f"[RECORDER][ERROR] policy {args.policy}: {' '.join(str(exc).split())}", file=sys.stderr, flush=True)
             return 2
         policy_version, policy_hash = engine.version, engine.policy_hash
-    signer = Signer.from_file(args.key)
+    try:
+        signer = Signer.from_file(args.key)
+    except (OSError, ValueError) as exc:
+        print(f"[RECORDER][ERROR] key {args.key}: cannot use as a private key: {exc}", file=sys.stderr, flush=True)
+        return 2
     ledger = Ledger(args.ledger, signer=signer)
     sink = None
     if args.git_repo:
@@ -499,6 +519,9 @@ def serve(args) -> int:
             ledger, port=args.port, token=token, policy_version=policy_version, policy_hash=policy_hash,
             heartbeat_s=args.heartbeat, anchors_path=args.anchors, sink=sink, anchor_s=anchor_every,
         ).start()
+    except OSError as exc:
+        print(f"[RECORDER][ERROR] cannot start on port {args.port}: {exc}", file=sys.stderr, flush=True)
+        return 2
     except LedgerTailError as exc:
         # the first heartbeat is the first write, so a ledger that ends in the middle of a line is found here
         print("[ERROR] " + " ".join(str(exc).split()), file=sys.stderr, flush=True)
