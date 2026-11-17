@@ -495,7 +495,11 @@ def serve(args) -> int:
             print(f"[RECORDER][ERROR] policy {args.policy}: {' '.join(str(exc).split())}", file=sys.stderr, flush=True)
             return 2
         policy_version, policy_hash = engine.version, engine.policy_hash
-    signer = Signer.from_file(args.key)
+    try:
+        signer = Signer.from_file(args.key)
+    except (OSError, ValueError) as exc:
+        print(f"[RECORDER][ERROR] key {args.key}: cannot use as a private key: {exc}", file=sys.stderr, flush=True)
+        return 2
     ledger = Ledger(args.ledger, signer=signer)
     sink = None
     if args.git_repo:
