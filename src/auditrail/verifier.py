@@ -250,10 +250,14 @@ def verify_all(
     witness_path=None,
     max_gap_s: Optional[int] = None,
 ) -> dict:
-    """Run every check that the given inputs allow. Returns a report dict with a `status`."""
+    """Run every check that the given inputs allow. Returns a report dict with a `status`.
+
+    Raises FileNotFoundError when the ledger path does not exist (it must not read as an empty, intact ledger)."""
     from .anchor import verify_anchors, verify_witness_file
 
     ledger_path = Path(ledger_path)
+    if not ledger_path.exists():  # a mistyped path must not read as "OK, 0 records"
+        raise FileNotFoundError(f"ledger not found: {ledger_path}")
     records, problem = _read_records(ledger_path)
     if problem is None:
         problem = check_chain(ledger_path, public_keys=public_keys, records=records)
