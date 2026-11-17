@@ -879,7 +879,7 @@ def _clean(s: Any) -> str:
     return re.sub(" {2,}", " ", "".join(out)).strip()
 
 
-_MD_SPECIAL = re.compile(r"[\`*\[\]()!#|~]")
+_MD_SPECIAL = re.compile(r"[\\`*\[\]()!#|~]")
 _MD_LEAD = re.compile(r"^(?:[-+=]|\d+[.)])(?=\s|$)")
 
 
