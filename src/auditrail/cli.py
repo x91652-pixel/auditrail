@@ -415,7 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_lint.add_argument("policy_path")
     p_lint.set_defaults(func=cmd_policy_lint)
 
-    p_demo = sub.add_parser("demo", help="Run the offline demo (no API key needed): allow, deny, trifecta-block, tamper-detect.")
+    p_demo = sub.add_parser("demo", help="Run the demo (no API key needed; makes one HTTPS request to api.github.com): allow, deny, trifecta-block, tamper-detect.")
     p_demo.set_defaults(func=cmd_demo)
 
     return p
