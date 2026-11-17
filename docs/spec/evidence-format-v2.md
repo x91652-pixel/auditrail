@@ -51,7 +51,7 @@ one accepts, so reading is specified exactly. A verifier MUST:
 - parse each remaining line as one JSON object (RFC 8259), a later duplicate key
   replacing an earlier one, and reject: `NaN`/`Infinity`, any number with a fraction or
   exponent, `-0`, any integer outside -2^63..2^63-1, a lone surrogate (in a string or a
-  key), a byte-order mark, and nesting deeper than 64 levels (the record object is level 1).
+  key), a byte-order mark, and nesting deeper than 64 levels (the record object is level 1; every value inside an object or an array, a scalar included, is one level deeper than the container that holds it, for example an integer inside 62 arrays nested in one member of the record is at level 64 and is accepted, inside 63 it is at level 65 and refused; both reference implementations behave so).
   A rejected line is `TAMPERED_LEDGER` with `bad_seq` = the number of records read before it;
 - treat hex fields (`hash`, `sig`, ...) as lowercase ASCII only: a signature with a space,
   a capital letter, a prefix, or the wrong length is invalid, never "close enough";

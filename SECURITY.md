@@ -215,3 +215,29 @@ covered). The verifier still reads a file that lacks only its final newline as t
   and the archives themselves are not reproducible byte for byte (the sdist carries build-time timestamps).
 - A `Guard` that is stopped or exits while a guarded call is still running does not write a heartbeat for that call: the
   call's record, if it is written, is not counted by any heartbeat.
+- **`OK` does not mean the file's bytes are what the recorder wrote.** A ledger line can carry a key twice
+  (`"decision":"deny","decision":"allow"`): both verifiers read the later one (the spec says so), so such a file verifies
+  as `OK` although it contains the earlier value as well. Rejecting duplicate keys would change the format; that
+  decision is left to the maintainer. The hash and signature cover the value that is read, not the raw bytes.
+- **`RemoteLedger` does not check who it is talking to.** Anything that answers on the recorder's loopback port with
+  `{"ok":true,...}` is taken as the recorder, and it receives the token, which is sent in clear text over the
+  loopback interface. The threat model is a trusted local machine; another local account that can bind the port
+  first can impersonate the recorder (on Windows the recorder now takes its port exclusively, which stops a second
+  program from sharing it, but not one that binds before the recorder starts). The only trace is a gap in the
+  heartbeats (`verify --max-gap`). Authenticating the recorder to the client is not implemented.
+- **Token guessing is not rate limited.** The recorder answers wrong tokens as fast as they arrive (about 28,000 per
+  second on one connection in a measurement). Use a long random token; the README shows how to make one. The
+  `change-me` style of example value is for illustration only.
+- **Smaller verifier notes.** (a) The Rust verifier, when given only `--anchors`, prints `OK ... anchored up to seq=N`
+  without saying that the anchors file is one the owner could have rewritten; only a `--witness` copy held by
+  someone else gives that protection. (b) `created_at` of an anchor is not checked for format, and anchor `seq` values
+  are not required to increase (the highest one counts); both verifiers agree, and the hashes and signatures still
+  cover the content. (c) `key_id` is the first 64 bits of the SHA-256 of the public key; if two keys with the same
+  `key_id` are passed with `--pubkey`, the later one silently replaces the earlier one in both verifiers (a
+  collision needs about 2^64 work; a later format version should use the full hash or refuse duplicates).
+  (d) `auditrail demo` makes one real HTTPS request to api.github.com (the command help now says so) and writes fixed
+  file names in the temporary directory (`auditrail-demo-ledger.jsonl`, `auditrail-demo-ledger-tampered.jsonl`); on a
+  shared POSIX `/tmp` another user could pre-place a symlink there (not run on POSIX here). (e) Dependabot watches
+  only GitHub Actions: the Python dependencies and the two `Cargo.lock` files are not covered.
+- On Windows a writer that has to wait for the anchors-file lock (or the ledger lock) polls about once a second, so two
+  anchor writers at the same moment cost the second one up to about a second.
