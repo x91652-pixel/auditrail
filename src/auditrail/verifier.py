@@ -163,6 +163,9 @@ def check_chain(path, public_keys: Optional[dict[str, str]] = None, records: Opt
 
 # Statuses that mean "this verifier could not judge" rather than "something is wrong with the evidence".
 INCONCLUSIVE = ("UNSUPPORTED_ALGORITHM", "UNSUPPORTED_FORMAT")
+# Results that mean "could not be judged", not "tampered": reported only when nothing definite was found. A missing
+# sink also depends on the unsigned sink_ref member, which anyone can edit, so it must not outrank a definite finding.
+DEFERRED = INCONCLUSIVE + ("SINK_UNREACHABLE",)
 
 
 def verify_legacy_v01(path) -> dict:
@@ -247,10 +250,14 @@ def verify_all(
     witness_path=None,
     max_gap_s: Optional[int] = None,
 ) -> dict:
-    """Run every check that the given inputs allow. Returns a report dict with a `status`."""
+    """Run every check that the given inputs allow. Returns a report dict with a `status`.
+
+    Raises FileNotFoundError when the ledger path does not exist (it must not read as an empty, intact ledger)."""
     from .anchor import verify_anchors, verify_witness_file
 
     ledger_path = Path(ledger_path)
+    if not ledger_path.exists():  # a mistyped path must not read as "OK, 0 records"
+        raise FileNotFoundError(f"ledger not found: {ledger_path}")
     records, problem = _read_records(ledger_path)
     if problem is None:
         problem = check_chain(ledger_path, public_keys=public_keys, records=records)
@@ -283,7 +290,7 @@ def verify_all(
     if anchors_path is not None:
         res = verify_anchors(ledger_path, anchors_path, sinks=sinks, public_keys=public_keys, records=records)
         anchor_algs.update(res.get("unchecked_algorithms", ()))
-        if res["status"] in INCONCLUSIVE:
+        if res["status"] in DEFERRED:
             deferred = deferred or res
             anchored_upto = res.get("anchored_upto")
         elif res["status"] != "OK":
@@ -293,7 +300,7 @@ def verify_all(
     if witness_path is not None:
         res = verify_witness_file(records, witness_path, public_keys=public_keys)
         anchor_algs.update(res.get("unchecked_algorithms", ()))
-        if res["status"] in INCONCLUSIVE:
+        if res["status"] in DEFERRED:
             deferred = deferred or res
         elif res["status"] != "OK":
             return {**res, **base}

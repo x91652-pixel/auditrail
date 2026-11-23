@@ -40,15 +40,19 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print(f"[ERROR] {args.anchors}: {why} (no result is produced; leave out --anchors to verify without one)",
               file=sys.stderr)
         return 2
-    if args.legacy_v01:
-        from .verifier import verify_legacy_v01
+    try:
+        if args.legacy_v01:
+            from .verifier import verify_legacy_v01
 
-        result = verify_legacy_v01(args.ledger_path)
-    else:
-        result = verify_all(
-            args.ledger_path, public_keys=_keys(args), anchors_path=args.anchors, sinks=_sinks(args.git_repo),
-            witness_path=args.witness_file, max_gap_s=args.max_gap,
-        )
+            result = verify_legacy_v01(args.ledger_path)
+        else:
+            result = verify_all(
+                args.ledger_path, public_keys=_keys(args), anchors_path=args.anchors, sinks=_sinks(args.git_repo),
+                witness_path=args.witness_file, max_gap_s=args.max_gap,
+            )
+    except OSError as exc:  # exists but cannot be read (a lock, permissions): an input problem, not a finding
+        print(f"[ERROR] {args.ledger_path}: {exc} (no result is produced)", file=sys.stderr)
+        return 2
     code = 0 if result["status"] == "OK" else 1
     if args.json:
         result.setdefault("anchored_upto", None)
@@ -105,7 +109,11 @@ def cmd_anchor(args: argparse.Namespace) -> int:
     if args.key:
         from .keys import Signer
 
-        signer = Signer.from_file(args.key)
+        try:
+            signer = Signer.from_file(args.key)
+        except (OSError, ValueError) as exc:
+            print(f"[ERROR] {args.key}: cannot use as a private key: {exc} (no anchor was recorded)", file=sys.stderr)
+            return 2
     try:
         result = anchor_ledger(Ledger(args.ledger), args.anchors, sink=sink, push=args.push, signer=signer)
     except AnchorError as exc:
@@ -152,7 +160,11 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     if missing:
         print(f"[ERROR] file(s) not found: {', '.join(missing)}")
         return 2
-    result = reconcile(args.ledgers, public_keys=_keys(args), agents=args.agent or ())
+    try:
+        result = reconcile(args.ledgers, public_keys=_keys(args), agents=args.agent or ())
+    except OSError as exc:
+        print(f"[ERROR] {exc} (no result is produced)", file=sys.stderr)
+        return 2
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
@@ -403,7 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_lint.add_argument("policy_path")
     p_lint.set_defaults(func=cmd_policy_lint)
 
-    p_demo = sub.add_parser("demo", help="Run the offline demo (no API key needed): allow, deny, trifecta-block, tamper-detect.")
+    p_demo = sub.add_parser("demo", help="Run the demo (no API key needed; makes one HTTPS request to api.github.com): allow, deny, trifecta-block, tamper-detect.")
     p_demo.set_defaults(func=cmd_demo)
 
     return p

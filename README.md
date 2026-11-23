@@ -177,7 +177,8 @@ auditrail keygen --out keys/recorder
 # 2. run the recorder as its own process (ideally its own OS user or host);
 #    it holds the key and the ledger, and agents can only append through a socket
 #    (policies/example_policy.yaml is the sample policy in the GitHub repository, not in the package)
-export AUDITRAIL_RECORDER_TOKEN=change-me
+# a long random token (the recorder does not limit wrong guesses); do not copy a fixed example value
+export AUDITRAIL_RECORDER_TOKEN=$(python -c "import secrets; print(secrets.token_hex(16))")
 auditrail recorder --ledger evidence.jsonl --key keys/recorder.key \
     --policy policies/example_policy.yaml --anchors anchors.jsonl \
     --git-repo ../witness            # anchors are committed here; you push it somewhere you don't control

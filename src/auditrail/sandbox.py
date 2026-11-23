@@ -94,6 +94,23 @@ def _isolated_env(passthrough: Iterable[str]) -> dict:
     return env
 
 
+def _kill_tree(popen: "subprocess.Popen") -> None:
+    """End the worker and everything it started (best effort)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(popen.pid)], capture_output=True, timeout=10)
+        else:
+            import signal
+
+            os.killpg(popen.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        popen.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _call_isolated(fn: Callable, args: tuple, kwargs: dict, timeout: float, env_passthrough: Iterable[str] = ()) -> Any:
     job = {"module": fn.__module__, "qualname": fn.__name__, "args": list(args), "kwargs": kwargs}
     if fn.__module__ == "__main__":
@@ -106,14 +123,27 @@ def _call_isolated(fn: Callable, args: tuple, kwargs: dict, timeout: float, env_
             f"'{fn.__name__}': {exc}"
         ) from exc
 
+    # The worker gets its own process group (POSIX session / Windows process group) so that on a timeout the whole tree
+    # can be ended: a tool that leaves a child holding the output pipes would otherwise keep communicate() waiting.
+    group = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    popen = subprocess.Popen(
+        [_sys.executable, "-m", "auditrail._isolate_worker"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        env=_isolated_env(env_passthrough), **group,
+    )
     try:
-        proc = subprocess.run(
-            [_sys.executable, "-m", "auditrail._isolate_worker"],
-            input=payload, capture_output=True, text=True, encoding="utf-8", timeout=timeout,
-            env=_isolated_env(env_passthrough),
-        )
+        stdout, stderr = popen.communicate(input=payload, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        _kill_tree(popen)
+        try:
+            popen.communicate(timeout=5)
+        except Exception:  # noqa: BLE001 - the tree is already being ended; do not let cleanup hide the timeout
+            pass
         raise TimeoutError(f"sandboxed call to {fn.__name__!r} exceeded {timeout}s") from exc
+    except BaseException:
+        _kill_tree(popen)
+        raise
+    proc = subprocess.CompletedProcess(popen.args, popen.returncode, stdout, stderr)
 
     # split on "\n" only: str.splitlines() would also split inside tool output on \x1c-\x1e etc.
     marked = [ln.rstrip("\r")[len(RESULT_MARKER):] for ln in (proc.stdout or "").split("\n") if ln.startswith(RESULT_MARKER)]
@@ -124,6 +154,16 @@ def _call_isolated(fn: Callable, args: tuple, kwargs: dict, timeout: float, env_
     if outcome["status"] == "error":
         raise RuntimeError(f"sandboxed call to {fn.__name__!r} raised: {outcome['error']}")
     return outcome["result"]
+
+
+
+def _clip(text: str, limit: int) -> str:
+    """`text` as something the ledger can always store: lone surrogates escaped, cut to `limit` characters (the
+    cut is said in the text). Used for fields that an unauthenticated sender controls."""
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
+    if len(text) > limit:
+        text = text[:limit] + f"...[{len(text) - limit} more characters cut]"
+    return text
 
 
 class Guard:
@@ -152,6 +192,7 @@ class Guard:
         self._count_lock = threading.Lock()
         self._attempted = 0
         self._recorded = 0
+        self._inflight = 0  # counted in _attempted, evidence not yet written (or given up on)
         self._hb_stop: Optional[threading.Event] = None
 
     # ------------------------------------------------------------ sessions
@@ -170,10 +211,13 @@ class Guard:
         return s
 
     # ------------------------------------------------------------ evidence
-    def _write(self, **fields: Any) -> None:
+    def _write(self, _pending: Optional[list] = None, **fields: Any) -> None:
         self.ledger.record(**fields)
         with self._count_lock:
             self._recorded += 1
+            if _pending is not None and _pending[0]:  # recorded and settled in one step: a heartbeat sees both or neither
+                self._inflight -= 1
+                _pending[0] = False
 
     def _reason_for(self, exc: BaseException) -> str:
         if self.record_error_text:
@@ -190,8 +234,11 @@ class Guard:
     def heartbeat(self, interval_s: int = 60) -> None:
         """Write one heartbeat: tools wrapped so far, policy hash, intercepted vs. recorded calls."""
         with self._count_lock:
-            attempted, recorded = self._attempted, self._recorded
-            self._attempted = self._recorded = 0
+            # A call that is still running is counted in _attempted but not yet in _recorded; reporting it now would
+            # show a call without evidence that is not one. It stays owed to the next heartbeat.
+            attempted, recorded = self._attempted - self._inflight, self._recorded
+            self._attempted -= attempted
+            self._recorded = 0
         try:
             self.ledger.record_heartbeat(
                 recorder_id=self.recorder_id, tools=sorted(self.tools), policy_version=self.policy.version,
@@ -260,10 +307,11 @@ class Guard:
         try:
             d = receive_envelope(envelope, registry, agent_id, replay_guard, max_age_seconds)
         except SignatureError as exc:
+            # Everything below came from an unauthenticated sender: shorten it and make it encodable.
             self.ledger.record_event(
-                "a2a_recv", agent_id=agent_id, status="rejected", reason=str(exc),
-                peer=str(envelope.get("sender")) if isinstance(envelope, dict) else None,
-                msg_id=str(envelope.get("msg_id")) if isinstance(envelope, dict) else None,
+                "a2a_recv", agent_id=agent_id, status="rejected", reason=_clip(str(exc), 512),
+                peer=_clip(str(envelope.get("sender")), 128) if isinstance(envelope, dict) else None,
+                msg_id=_clip(str(envelope.get("msg_id")), 128) if isinstance(envelope, dict) else None,
             )
             raise
         session = self.session(agent_id, trace_id=d.trace_id, inherited=d.categories)
@@ -324,46 +372,53 @@ class Guard:
             def wrapper(session: SessionState, *args: Any, **kwargs: Any) -> Any:
                 with self._count_lock:
                     self._attempted += 1
-                # check and reserve in one locked step: a second call admitted a moment later must see this one
-                decision: Decision = self.policy.admit(session, name, extra_categories=categories)
-                call_args = {"args": args, "kwargs": kwargs}
-                common = dict(agent_id=session.agent_id, session_id=session.session_id, trace_id=session.trace_id,
-                              policy_version=self.policy.version, policy_hash=self.policy.policy_hash,
-                              tool=name, categories=categories, args=call_args)
-
-                if not decision.allow:
-                    self._write(**common, decision="deny", reason=decision.reason)
-                    if on_deny == "return_none":
-                        return None
-                    raise ToolDenied(name, decision.reason or "denied")
-
-                start = time.monotonic()
+                    self._inflight += 1
+                pending = [True]  # cleared once the evidence is written; otherwise released in the finally below
                 try:
-                    if isolate:
-                        result = _call_isolated(fn, args, kwargs, timeout, env_passthrough)
-                        effective_decision = "sandboxed"
-                    else:
-                        result = fn(*args, **kwargs)
-                        effective_decision = "allow"
-                except Exception as exc:
-                    # The categories were reserved at admission (a failed call may have touched data first).
-                    self._write(**common, decision="error", reason=self._reason_for(exc),
-                                duration_ms=(time.monotonic() - start) * 1000)
-                    raise
-                except BaseException as exc:
-                    # SystemExit, KeyboardInterrupt, asyncio.CancelledError: not an Exception, but the tool may have
-                    # read data before it was interrupted. Its categories are already reserved; record it as an error
-                    # (best effort: a failing write must not hide the interrupt) and let the interrupt continue.
-                    try:
-                        self._write(**common, decision="error", reason=self._reason_for(exc),
-                                    duration_ms=(time.monotonic() - start) * 1000)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    raise
-                duration_ms = (time.monotonic() - start) * 1000
+                    # check and reserve in one locked step: a second call admitted a moment later must see this one
+                    decision: Decision = self.policy.admit(session, name, extra_categories=categories)
+                    call_args = {"args": args, "kwargs": kwargs}
+                    common = dict(agent_id=session.agent_id, session_id=session.session_id, trace_id=session.trace_id,
+                                  policy_version=self.policy.version, policy_hash=self.policy.policy_hash,
+                                  tool=name, categories=categories, args=call_args)
 
-                self._write(**common, decision=effective_decision, result=result, duration_ms=duration_ms)
-                return result
+                    if not decision.allow:
+                        self._write(pending, **common, decision="deny", reason=decision.reason)
+                        if on_deny == "return_none":
+                            return None
+                        raise ToolDenied(name, decision.reason or "denied")
+
+                    start = time.monotonic()
+                    try:
+                        if isolate:
+                            result = _call_isolated(fn, args, kwargs, timeout, env_passthrough)
+                            effective_decision = "sandboxed"
+                        else:
+                            result = fn(*args, **kwargs)
+                            effective_decision = "allow"
+                    except Exception as exc:
+                        # The categories were reserved at admission (a failed call may have touched data first).
+                        self._write(pending, **common, decision="error", reason=self._reason_for(exc),
+                                    duration_ms=(time.monotonic() - start) * 1000)
+                        raise
+                    except BaseException as exc:
+                        # SystemExit, KeyboardInterrupt, asyncio.CancelledError: not an Exception, but the tool may have
+                        # read data before it was interrupted. Its categories are already reserved; record it as an error
+                        # (best effort: a failing write must not hide the interrupt) and let the interrupt continue.
+                        try:
+                            self._write(pending, **common, decision="error", reason=self._reason_for(exc),
+                                        duration_ms=(time.monotonic() - start) * 1000)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        raise
+                    duration_ms = (time.monotonic() - start) * 1000
+
+                    self._write(pending, **common, decision=effective_decision, result=result, duration_ms=duration_ms)
+                    return result
+                finally:
+                    if pending[0]:
+                        with self._count_lock:
+                            self._inflight -= 1
 
             wrapper.__auditrail_tool__ = name
             return wrapper

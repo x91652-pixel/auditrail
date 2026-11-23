@@ -51,7 +51,7 @@ one accepts, so reading is specified exactly. A verifier MUST:
 - parse each remaining line as one JSON object (RFC 8259), a later duplicate key
   replacing an earlier one, and reject: `NaN`/`Infinity`, any number with a fraction or
   exponent, `-0`, any integer outside -2^63..2^63-1, a lone surrogate (in a string or a
-  key), a byte-order mark, and nesting deeper than 64 levels (the record object is level 1).
+  key), a byte-order mark, and nesting deeper than 64 levels (the record object is level 1; every value inside an object or an array, a scalar included, is one level deeper than the container that holds it, for example an integer inside 62 arrays nested in one member of the record is at level 64 and is accepted, inside 63 it is at level 65 and refused; both reference implementations behave so).
   A rejected line is `TAMPERED_LEDGER` with `bad_seq` = the number of records read before it;
 - treat hex fields (`hash`, `sig`, ...) as lowercase ASCII only: a signature with a space,
   a capital letter, a prefix, or the wrong length is invalid, never "close enough";
@@ -229,11 +229,14 @@ the line malformed, reported as `TAMPERED_ANCHOR` ("malformed anchor line"), not
    outranks a later record's `TAMPERED_LEDGER`.
 3. **The owner's anchors file**: line checks (`TAMPERED_ANCHOR`, `UNSIGNED_ANCHOR`, `UNKNOWN_KEY`,
    `BAD_SIGNATURE`; a line whose algorithm is not implemented is remembered and the line is still compared with
-   the ledger), then `TRUNCATED` / `REWRITTEN`, then the witness sinks (`SINK_UNREACHABLE`, `SINK_MISMATCH`).
+   the ledger), then `TRUNCATED` / `REWRITTEN`, then the witness sinks, anchor by anchor (`SINK_MISMATCH`; a sink that cannot be reached, `SINK_UNREACHABLE`, is *remembered* like an
+   unsupported algorithm, because the `sink_ref` that names it is neither hashed nor signed and anyone can edit it). The Python
+   implementation stops this per-anchor walk at the first anchor whose sink cannot be reached, so a later
+   `SINK_MISMATCH` is not reported in that case (a known residual, see SECURITY.md).
 4. **The witness copy**: the same, line by line.
 5. **Heartbeats** (if a maximum gap was given): `NO_HEARTBEAT`, `UNRECORDED_CALLS`, `HEARTBEAT_GAP`.
-6. Only now, if nothing definite was found: the **remembered** `UNSUPPORTED_*` (the earliest one in the order
-   above), with `anchored_upto` / `unanchored_tail` of what *was* covered; otherwise `OK`.
+6. Only now, if nothing definite was found: the **remembered** `UNSUPPORTED_*` or `SINK_UNREACHABLE` (the earliest one
+   in the order above), with `anchored_upto` / `unanchored_tail` of what *was* covered; otherwise `OK`.
 
 Conformance vectors 25-36 pin this order and the mismatch rule (an edit plus a `sig_alg` or `format: 3` is
 reported by the signature or the witness; an edit in the unanchored tail with every following record given a
